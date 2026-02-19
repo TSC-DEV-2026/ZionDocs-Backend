@@ -27,7 +27,7 @@ def send_email_smtp(to_email: str, subject: str, body_text: str) -> None:
         )
 
     msg = MIMEMultipart()
-    msg["From"] = from_email
+    msg["From"] = 'ZionDocs <tscdev2@gmail.com>'
     msg["To"] = to_email
     msg["Subject"] = subject
     msg.attach(MIMEText(body_text, "plain", "utf-8"))

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     EMAIL_PASSWORD: str
     EMAIL_USE_TLS: bool = False
     EMAIL_USE_SSL: bool = True
+    EMAIL_FROM_NAME: str
     EMAIL_SENDER: str
 
     # ✅ ADICIONE ISSO AQUI (aliases)
