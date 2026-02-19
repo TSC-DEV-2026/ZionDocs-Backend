@@ -18,7 +18,7 @@ app = FastAPI(title="Consulta de Documentos – WeCanBR")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://rh.ziondocs.com.br", "http://frontend-ziondocs.s3-website.us-east-2.amazonaws.com"],
+    allow_origins=["http://localhost:5173", "https://rh.ziondocs.com.br", "http://frontend-ziondocs.s3-website.us-east-2.amazonaws.com", "https://ziondocs-frontend.onrender.com", "https://rh2.ziondocs.com.br"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
