@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import warnings
 
 from app.database.connection import engine, Base
 
@@ -22,6 +23,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+warnings.filterwarnings(
+    "ignore",
+    message="Valid config keys have changed in V2:.*",
 )
 
 # rotas

@@ -27,5 +27,5 @@ class Gravadas(BaseModel):
     date: date
     time: time
 
-    class Config:
-        orm_mode = True
+class Config:
+    from_attributes = True
