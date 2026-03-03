@@ -112,3 +112,29 @@ class InternalValidateTokenRequest(BaseModel):
 class InternalValidateTokenResponse(BaseModel):
     valid: bool
     reason: Optional[str] = None
+
+class PasswordResetRequest(BaseModel):
+    email: str = Field(..., min_length=5)
+
+
+class PasswordResetConfirm(BaseModel):
+    email: str = Field(..., min_length=5)
+    token: str = Field(..., min_length=4)
+    nova_senha: str = Field(..., min_length=4)
+
+
+class PasswordResetResponse(BaseModel):
+    ok: bool
+    message: str
+
+class PasswordResetRequest(BaseModel):
+    usuario: str = Field(..., min_length=3)  # CPF ou "email-login" (tb_usuario.email)
+
+class PasswordResetConfirm(BaseModel):
+    usuario: str = Field(..., min_length=3)
+    token: str = Field(..., min_length=4)
+    nova_senha: str = Field(..., min_length=4)
+
+class PasswordResetResponse(BaseModel):
+    ok: bool
+    message: str
