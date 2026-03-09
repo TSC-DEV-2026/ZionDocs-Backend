@@ -17,7 +17,7 @@ from app.routers import docs_db as docs_db_router
 # from app.routers import ged2   as ged_router
 from app.routers import gustavo as gustavo_router
 
-app = FastAPI(title="Consulta de Documentos – WeCanBR")
+app = FastAPI(title="ZionDocs API")
 
 app.add_middleware(
     CORSMiddleware,
