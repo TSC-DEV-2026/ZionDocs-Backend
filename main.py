@@ -12,7 +12,9 @@ Base.metadata.create_all(bind=engine)
 from app.routers import livechat as livechat_router
 from app.routers import document as documents_router
 from app.routers import user  as usuario_router
-from app.routers import ged   as ged_router
+from app.routers import ged2    as ged_router
+from app.routers import docs_db as docs_db_router
+# from app.routers import ged2   as ged_router
 from app.routers import gustavo as gustavo_router
 
 app = FastAPI(title="Consulta de Documentos – WeCanBR")
@@ -33,7 +35,10 @@ warnings.filterwarnings(
 # rotas
 app.include_router(documents_router.router, tags=["Documentos"])
 app.include_router(usuario_router.router, tags=["Usuários"])
+
 app.include_router(ged_router.router, tags=["GED"])
+app.include_router(docs_db_router.router, tags=["Documentos DB"])
+
 app.include_router(livechat_router.router, tags=["Live Chat"])
 app.include_router(gustavo_router.router, tags=["Gustavo"])
 
