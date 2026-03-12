@@ -12,6 +12,7 @@ Base.metadata.create_all(bind=engine)
 from app.routers import livechat as livechat_router
 from app.routers import document as documents_router
 from app.routers import user  as usuario_router
+from app.routers import docs_db as docs_db
 from app.routers import ged   as ged_router
 from app.routers import gustavo as gustavo_router
 
@@ -33,6 +34,7 @@ warnings.filterwarnings(
 # rotas
 app.include_router(documents_router.router, tags=["Documentos"])
 app.include_router(usuario_router.router, tags=["Usuários"])
+app.include_router(docs_db.router, tags=["DocsDB"])
 app.include_router(ged_router.router, tags=["GED"])
 app.include_router(livechat_router.router, tags=["Live Chat"])
 app.include_router(gustavo_router.router, tags=["Gustavo"])

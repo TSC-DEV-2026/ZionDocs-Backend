@@ -35,6 +35,20 @@ class MontarHolerite(BaseModel):
     )
 
 
+class BuscarInformeRendimentos(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    cpf: str = Field(..., min_length=1)
+    matricula: Optional[str] = None
+    empresa: Optional[str] = None
+
+
+class MontarInformeRendimentos(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    cpf: str = Field(..., min_length=1)
+    matricula: Optional[str] = None
+    empresa: Optional[str] = None
+
+
 def _only_yyyymm(s: str) -> str:
     return re.sub(r"\D", "", (s or ""))[:6]
 
@@ -76,6 +90,261 @@ def fmt_num(valor: float) -> str:
 def truncate(text: str, max_len: int) -> str:
     text = text or ""
     return text if len(text) <= max_len else text[: max_len - 3] + "..."
+
+
+def _as_str(v: Any) -> str:
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
+def _as_decimal(v: Any) -> Decimal:
+    if v is None or v == "":
+        return Decimal("0")
+    try:
+        if isinstance(v, Decimal):
+            return v
+        return Decimal(str(v))
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal("0")
+
+
+def _fmt_money(v: Any) -> str:
+    d = _as_decimal(v)
+    s = f"{d:,.2f}"
+    return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _draw_box(pdf: FPDF, x: float, y: float, w: float, h: float):
+    pdf.rect(x, y, w, h)
+
+
+def _cell_text(
+    pdf: FPDF,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    text: str,
+    font_size: int = 8,
+    style: str = "",
+    align: str = "L",
+):
+    pdf.set_xy(x, y)
+    pdf.set_font("Arial", style, font_size)
+    pdf.multi_cell(w, h, text, border=0, align=align)
+
+
+def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
+    if not registros:
+        raise ValueError("Nenhum registro encontrado para montar o PDF.")
+
+    GOVERNO_LOGO_PATH = "app/assets/images.jpg"
+
+    pdf = FPDF(format="A4", unit="mm")
+    pdf.set_auto_page_break(auto=False)
+
+    for registro in registros:
+        pdf.add_page()
+        pdf.set_draw_color(0, 0, 0)
+        pdf.set_line_width(0.2)
+
+        codigo_empresa = _as_str(registro.get("codigo_empresa"))
+        cpf_cnpj = _as_str(registro.get("cpf_cnpj"))
+        nome_empresa = truncate(_as_str(registro.get("nome_empresa")), 90)
+        matricula = _as_str(registro.get("matricula"))
+        cpf = _as_str(registro.get("cpf"))
+        nome = truncate(_as_str(registro.get("nome")), 90)
+
+        rendimento_ferias_01 = _fmt_money(registro.get("rendimento_ferias_01"))
+        inss_02 = _fmt_money(registro.get("inss_02"))
+        prevprivada_03 = _fmt_money(registro.get("prevprivada_03"))
+        pensao_04 = _fmt_money(registro.get("pensao_04"))
+        irrf_irrfferias_05 = _fmt_money(registro.get("irrf_irrfferias_05"))
+
+        ajucusto_02 = _fmt_money(registro.get("ajucusto_02"))
+        avisoprevio_06 = _fmt_money(registro.get("avisoprevio_06"))
+        feriasabono_07 = _fmt_money(registro.get("feriasabono_07"))
+
+        rendimento_irrf_inss_dependente_01 = _fmt_money(
+            registro.get("rendimento_irrf_inss_dependente_01")
+        )
+        irrf_02 = _fmt_money(registro.get("irrf_02"))
+        plucro_03 = _fmt_money(registro.get("plucro_03"))
+
+        try:
+            pdf.image(GOVERNO_LOGO_PATH, x=10, y=7, w=24)
+        except Exception:
+            pass
+
+        pdf.set_xy(36, 8)
+        pdf.set_font("Arial", "", 8)
+        pdf.multi_cell(
+            82,
+            4,
+            "Ministério da Fazenda\n"
+            "Secretaria Especial da Receita Federal do Brasil\n"
+            "Imposto sobre a Renda da Pessoa Física\n"
+            "Exercício de 2026",
+            border=0,
+            align="C",
+        )
+
+        pdf.set_xy(123, 10)
+        pdf.set_font("Arial", "B", 9)
+        pdf.multi_cell(
+            76,
+            4.5,
+            "COMPROVANTE DE RENDIMENTOS PAGOS E DE\n"
+            "IMPOSTO SOBRE A RENDA RETIDO NA FONTE\n"
+            "ANO-CALENDÁRIO 2025",
+            border=0,
+            align="C",
+        )
+
+        pdf.set_xy(10, 29)
+        pdf.set_font("Arial", "", 6.5)
+        pdf.multi_cell(
+            190,
+            3.5,
+            "Verifique as condições e o prazo para a apresentação da Declaração do Imposto sobre a Renda da Pessoa Física para este ano-calendário no sítio da Secretaria Especial da Receita Federal do Brasil na internet.",
+            border=0,
+            align="L",
+        )
+
+        y = 39
+        _draw_box(pdf, 10, y, 190, 18)
+        _cell_text(pdf, 11, y + 1, 188, 4, "1. FONTE PAGADORA PESSOA JURÍDICA", 8, "B")
+        pdf.line(10, y + 6, 200, y + 6)
+        pdf.line(55, y + 6, 55, y + 18)
+        _cell_text(pdf, 12, y + 7, 40, 4, "CNPJ", 7, "B")
+        _cell_text(pdf, 57, y + 7, 140, 4, "Nome Empresarial", 7, "B")
+        _cell_text(pdf, 12, y + 11, 40, 4, cpf_cnpj, 8, "")
+        _cell_text(pdf, 57, y + 11, 140, 4, nome_empresa, 8, "")
+
+        y = 59
+        _draw_box(pdf, 10, y, 190, 24)
+        _cell_text(pdf, 11, y + 1, 188, 4, "2. PESSOA FÍSICA BENEFICIÁRIA DOS RENDIMENTOS", 8, "B")
+        pdf.line(10, y + 6, 200, y + 6)
+        pdf.line(55, y + 6, 55, y + 16)
+        _cell_text(pdf, 12, y + 7, 40, 4, "CPF", 7, "B")
+        _cell_text(pdf, 57, y + 7, 140, 4, "Nome Completo", 7, "B")
+        _cell_text(pdf, 12, y + 11, 40, 4, cpf, 8, "")
+        _cell_text(pdf, 57, y + 11, 140, 4, nome, 8, "")
+        pdf.line(10, y + 16, 200, y + 16)
+        _cell_text(pdf, 12, y + 17, 180, 4, f"Matrícula: {matricula}", 8, "")
+
+        y = 85
+        _draw_box(pdf, 10, y, 190, 34)
+        _cell_text(
+            pdf,
+            11,
+            y + 1,
+            140,
+            4,
+            "3. RENDIMENTOS TRIBUTÁVEIS, DEDUÇÕES E IMPOSTO SOBRE A RENDA RETIDO NA FONTE",
+            8,
+            "B",
+        )
+        _cell_text(pdf, 160, y + 1, 35, 4, "VALORES EM REAIS", 7, "B", "R")
+        pdf.line(10, y + 6, 200, y + 6)
+
+        linhas_q3 = [
+            ("01. Total dos rendimentos de férias", rendimento_ferias_01),
+            ("02. Contribuição previdenciária oficial", inss_02),
+            ("03. Contribuição à previdência privada", prevprivada_03),
+            ("04. Pensão alimentícia", pensao_04),
+            ("05. Imposto sobre a renda retido na fonte", irrf_irrfferias_05),
+        ]
+
+        y_line = y + 7
+        for desc, valor in linhas_q3:
+            _cell_text(pdf, 12, y_line, 145, 4, desc, 8, "")
+            _cell_text(pdf, 160, y_line, 35, 4, valor, 8, "", "R")
+            y_line += 5.2
+
+        y = 121
+        _draw_box(pdf, 10, y, 190, 30)
+        _cell_text(pdf, 11, y + 1, 135, 4, "4. RENDIMENTOS ISENTOS E NÃO TRIBUTÁVEIS", 8, "B")
+        _cell_text(pdf, 160, y + 1, 35, 4, "VALORES EM REAIS", 7, "B", "R")
+        pdf.line(10, y + 6, 200, y + 6)
+
+        linhas_q4 = [
+            ("02. Diárias e ajuda de custo", ajucusto_02),
+            ("06. Aviso prévio indenizado", avisoprevio_06),
+            ("07. Abono pecuniário de férias", feriasabono_07),
+        ]
+
+        y_line = y + 7
+        for desc, valor in linhas_q4:
+            _cell_text(pdf, 12, y_line, 145, 5, desc, 8, "")
+            _cell_text(pdf, 160, y_line, 35, 5, valor, 8, "", "R")
+            y_line += 6.7
+
+        y = 153
+        _draw_box(pdf, 10, y, 190, 26)
+        _cell_text(
+            pdf,
+            11,
+            y + 1,
+            140,
+            4,
+            "5. RENDIMENTOS SUJEITOS À TRIBUTAÇÃO EXCLUSIVA (RENDIMENTO LÍQUIDO)",
+            8,
+            "B",
+        )
+        _cell_text(pdf, 160, y + 1, 35, 4, "VALORES EM REAIS", 7, "B", "R")
+        pdf.line(10, y + 6, 200, y + 6)
+
+        linhas_q5 = [
+            ("01. Rendimentos tributação exclusiva", rendimento_irrf_inss_dependente_01),
+            ("02. Imposto sobre a renda na fonte", irrf_02),
+            ("03. Participação nos lucros ou resultados", plucro_03),
+        ]
+
+        y_line = y + 7
+        for desc, valor in linhas_q5:
+            _cell_text(pdf, 12, y_line, 145, 5, desc, 8, "")
+            _cell_text(pdf, 160, y_line, 35, 5, valor, 8, "", "R")
+            y_line += 6
+
+        y = 181
+        _draw_box(pdf, 10, y, 190, 48)
+        _cell_text(pdf, 11, y + 1, 188, 4, "7. INFORMAÇÕES COMPLEMENTARES", 8, "B")
+        pdf.line(10, y + 6, 200, y + 6)
+
+        info_complementar = (
+            f"Código da empresa: {codigo_empresa}\n"
+            f"Fonte pagadora: {nome_empresa}\n"
+            f"CPF do beneficiário: {cpf}\n"
+            f"Matrícula: {matricula}\n"
+            f"Comprovante gerado a partir das informações registradas no banco de dados."
+        )
+        _cell_text(pdf, 12, y + 8, 184, 4, info_complementar, 8, "")
+
+        y = 231
+        _draw_box(pdf, 10, y, 190, 26)
+        _cell_text(pdf, 11, y + 1, 188, 4, "8. RESPONSÁVEL PELAS INFORMAÇÕES", 8, "B")
+        pdf.line(10, y + 6, 200, y + 6)
+        pdf.line(120, y + 6, 120, y + 26)
+        _cell_text(pdf, 12, y + 7, 105, 4, "Nome", 7, "B")
+        _cell_text(pdf, 122, y + 7, 30, 4, "Data", 7, "B")
+        _cell_text(pdf, 155, y + 7, 40, 4, "Assinatura", 7, "B")
+        _cell_text(pdf, 12, y + 12, 105, 4, "RESPONSÁVEL PELAS INFORMAÇÕES", 8, "")
+        _cell_text(pdf, 122, y + 12, 30, 4, datetime.now().strftime("%d/%m/%Y"), 8, "")
+        _cell_text(pdf, 155, y + 12, 40, 4, "", 8, "")
+
+        pdf.set_xy(10, 262)
+        pdf.set_font("Arial", "", 6)
+        pdf.multi_cell(
+            190,
+            3.5,
+            "Aprovado pela IN RFB nº 1.682, de 28 de dezembro de 2016.",
+            border=0,
+            align="L",
+        )
+
+    return pdf.output(dest="S").encode("latin-1")
 
 
 def gerar_recibo(cabecalho: dict, eventos: list[dict], rodape: dict, page_number: int = 1) -> bytes:
@@ -619,6 +888,148 @@ def montar_holerite(payload: MontarHolerite, db: Session = Depends(get_db)):
         "cabecalho": cabecalho,
         "eventos": eventos,
         "rodape": rodape,
+        "pdf_base64": pdf_base64,
+    }
+
+
+@router.post("/documents/informe-rendimentos/buscar")
+def buscar_informe_rendimentos(
+    payload: BuscarInformeRendimentos = Body(...),
+    db: Session = Depends(get_db),
+):
+    cpf = _as_str(payload.cpf)
+    matricula = _as_str(payload.matricula)
+    empresa = _as_str(payload.empresa)
+
+    if not cpf:
+        raise HTTPException(status_code=422, detail="Informe cpf.")
+
+    filtros = [
+        "regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') = regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')"
+    ]
+    params: Dict[str, Any] = {"cpf": cpf}
+
+    if matricula:
+        filtros.append("TRIM(matricula::text) = TRIM(:matricula)")
+        params["matricula"] = matricula
+
+    if empresa:
+        filtros.append("TRIM(nome_empresa::text) = TRIM(:empresa)")
+        params["empresa"] = empresa
+
+    sql = text(f"""
+        SELECT
+            codigo_empresa,
+            cpf_cnpj,
+            nome_empresa,
+            matricula,
+            cpf,
+            nome,
+            rendimento_ferias_01,
+            inss_02,
+            prevprivada_03,
+            pensao_04,
+            irrf_irrfferias_05,
+            ajucusto_02,
+            avisoprevio_06,
+            feriasabono_07,
+            rendimento_irrf_inss_dependente_01,
+            irrf_02,
+            plucro_03
+        FROM public.tb_informe_rendimentos
+        WHERE {" AND ".join(filtros)}
+        ORDER BY nome, matricula
+    """)
+
+    rows = db.execute(sql, params).fetchall()
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhum informe de rendimentos encontrado para os critérios informados."
+        )
+
+    informes = [dict(r._mapping) for r in rows]
+
+    return {
+        "tipo": "informe_rendimentos",
+        "cpf": cpf,
+        "matricula": matricula,
+        "empresa": empresa,
+        "total": len(informes),
+        "informes": informes,
+    }
+
+
+@router.post("/documents/informe-rendimentos/montar")
+def montar_informe_rendimentos(
+    payload: MontarInformeRendimentos = Body(...),
+    db: Session = Depends(get_db),
+):
+    cpf = _as_str(payload.cpf)
+    matricula = _as_str(payload.matricula)
+    empresa = _as_str(payload.empresa)
+
+    if not cpf:
+        raise HTTPException(status_code=422, detail="Informe cpf.")
+
+    filtros = [
+        "regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') = regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')"
+    ]
+    params: Dict[str, Any] = {"cpf": cpf}
+
+    if matricula:
+        filtros.append("TRIM(matricula::text) = TRIM(:matricula)")
+        params["matricula"] = matricula
+
+    if empresa:
+        filtros.append("TRIM(nome_empresa::text) = TRIM(:empresa)")
+        params["empresa"] = empresa
+
+    sql = text(f"""
+        SELECT
+            codigo_empresa,
+            cpf_cnpj,
+            nome_empresa,
+            matricula,
+            cpf,
+            nome,
+            rendimento_ferias_01,
+            inss_02,
+            prevprivada_03,
+            pensao_04,
+            irrf_irrfferias_05,
+            ajucusto_02,
+            avisoprevio_06,
+            feriasabono_07,
+            rendimento_irrf_inss_dependente_01,
+            irrf_02,
+            plucro_03
+        FROM public.tb_informe_rendimentos
+        WHERE {" AND ".join(filtros)}
+        ORDER BY nome, matricula
+    """)
+
+    rows = db.execute(sql, params).fetchall()
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhum informe de rendimentos encontrado para os critérios informados."
+        )
+
+    informes = [dict(r._mapping) for r in rows]
+
+    raw_pdf = gerar_informe_rendimentos_pdf(informes)
+    pdf_base64 = base64.b64encode(raw_pdf).decode("utf-8")
+
+    return {
+        "tipo": "informe_rendimentos",
+        "cpf": cpf,
+        "matricula": matricula,
+        "empresa": empresa,
+        "total": len(informes),
+        "informes": informes,
         "pdf_base64": pdf_base64,
     }
 
