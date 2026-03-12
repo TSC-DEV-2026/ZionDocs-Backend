@@ -662,3 +662,89 @@ def reset_password(
         raise HTTPException(status_code=404, detail="Nenhum usuário encontrado para o CPF informado")
 
     return PasswordResetResponse(ok=True, message="Senha redefinida com sucesso")
+
+@router.put("/user/update-password")
+def update_password(
+    body: AtualizarSenhaRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    access_token = request.cookies.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=401, detail="Token de autenticação ausente")
+
+    payload = verificar_token(access_token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token inválido")
+
+    jti = payload.get("jti")
+    if not jti:
+        raise HTTPException(status_code=401, detail="Token sem identificador único (jti)")
+
+    if db.query(TokenBlacklist).filter_by(jti=jti).first():
+        raise HTTPException(status_code=401, detail="Token expirado ou inválido")
+
+    pessoa_id = payload.get("id")
+    pessoa = db.query(Pessoa).filter(Pessoa.id == pessoa_id).first()
+    if not pessoa:
+        raise HTTPException(status_code=401, detail="Pessoa não encontrada")
+
+    # Normaliza CPF enviado e CPF do usuário autenticado
+    cpf_body = "".join(ch for ch in str(body.cpf or "") if ch.isdigit())
+    cpf_pessoa = "".join(ch for ch in str(pessoa.cpf or "") if ch.isdigit())
+
+    if not cpf_body or cpf_body != cpf_pessoa:
+        raise HTTPException(status_code=403, detail="CPF não confere com o usuário autenticado")
+
+    if body.senha_atual == body.senha_nova:
+        raise HTTPException(status_code=400, detail="A nova senha não pode ser igual à senha antiga")
+
+    # 1) Confere se existe ao menos um usuário daquele CPF com a senha atual informada
+    sql_check = text("""
+        SELECT 1
+        FROM app_rh.tb_usuario u
+        JOIN app_rh.tb_pessoa p ON p.id = u.id_pessoa
+        WHERE
+            regexp_replace(TRIM(p.cpf::text), '[^0-9]', '', 'g')
+                = regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+            AND COALESCE(u.senha::text, '') = :senha_atual
+        LIMIT 1
+    """)
+
+    ok = db.execute(
+        sql_check,
+        {"cpf": cpf_body, "senha_atual": body.senha_atual},
+    ).scalar()
+
+    if not ok:
+        raise HTTPException(status_code=400, detail="Senha antiga incorreta")
+
+    # 2) Atualiza TODOS os vínculos do CPF (todas as empresas)
+    sql_update = text("""
+        UPDATE app_rh.tb_usuario u
+        SET
+            senha = :senha_nova,
+            senha_trocada = TRUE
+        FROM app_rh.tb_pessoa p
+        WHERE
+            u.id_pessoa = p.id
+            AND regexp_replace(TRIM(p.cpf::text), '[^0-9]', '', 'g')
+                = regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+    """)
+
+    result = db.execute(
+        sql_update,
+        {"senha_nova": body.senha_nova, "cpf": cpf_body},
+    )
+    db.commit()
+
+    updated_rows = result.rowcount or 0
+    if updated_rows == 0:
+        raise HTTPException(status_code=404, detail="Nenhum usuário encontrado para o CPF informado")
+
+    return {
+        "message": "Senha atualizada com sucesso",
+        "senha_trocada": True,
+        "usuarios_atualizados": updated_rows,
+    }
+
