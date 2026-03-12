@@ -13,8 +13,7 @@ from fpdf import FPDF  # type: ignore
 
 from app.database.connection import get_db
 
-router = APIRouter(tags=["Documentos DB"])
-
+router = APIRouter()
 
 class BuscarHolerite(BaseModel):
     model_config = ConfigDict(from_attributes=True)
