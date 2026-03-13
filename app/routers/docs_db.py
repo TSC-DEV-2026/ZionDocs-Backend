@@ -15,6 +15,7 @@ from app.database.connection import get_db
 
 router = APIRouter()
 
+
 class BuscarHolerite(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
@@ -39,6 +40,7 @@ class BuscarInformeRendimentos(BaseModel):
     cpf: str = Field(..., min_length=1)
     matricula: Optional[str] = None
     empresa: Optional[str] = None
+    competencia: Optional[str] = None
 
 
 class MontarInformeRendimentos(BaseModel):
@@ -46,6 +48,7 @@ class MontarInformeRendimentos(BaseModel):
     cpf: str = Field(..., min_length=1)
     matricula: Optional[str] = None
     empresa: Optional[str] = None
+    competencia: Optional[str] = None
 
 
 def _only_yyyymm(s: str) -> str:
@@ -149,11 +152,12 @@ def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
         pdf.set_line_width(0.2)
 
         codigo_empresa = _as_str(registro.get("codigo_empresa"))
-        cpf_cnpj = _as_str(registro.get("cpf_cnpj"))
+        cpf_cnpj_empresa = _as_str(registro.get("cpf_cnpj_empresa"))
         nome_empresa = truncate(_as_str(registro.get("nome_empresa")), 90)
         matricula = _as_str(registro.get("matricula"))
         cpf = _as_str(registro.get("cpf"))
         nome = truncate(_as_str(registro.get("nome")), 90)
+        competencia = _as_str(registro.get("competencia"))
 
         rendimento_ferias_01 = _fmt_money(registro.get("rendimento_ferias_01"))
         inss_02 = _fmt_money(registro.get("inss_02"))
@@ -218,7 +222,7 @@ def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
         pdf.line(55, y + 6, 55, y + 18)
         _cell_text(pdf, 12, y + 7, 40, 4, "CNPJ", 7, "B")
         _cell_text(pdf, 57, y + 7, 140, 4, "Nome Empresarial", 7, "B")
-        _cell_text(pdf, 12, y + 11, 40, 4, cpf_cnpj, 8, "")
+        _cell_text(pdf, 12, y + 11, 40, 4, cpf_cnpj_empresa, 8, "")
         _cell_text(pdf, 57, y + 11, 140, 4, nome_empresa, 8, "")
 
         y = 59
@@ -317,6 +321,7 @@ def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
             f"Fonte pagadora: {nome_empresa}\n"
             f"CPF do beneficiário: {cpf}\n"
             f"Matrícula: {matricula}\n"
+            f"Competência: {competencia}\n"
             f"Comprovante gerado a partir das informações registradas no banco de dados."
         )
         _cell_text(pdf, 12, y + 8, 184, 4, info_complementar, 8, "")
@@ -899,6 +904,7 @@ def buscar_informe_rendimentos(
     cpf = _as_str(payload.cpf)
     matricula = _as_str(payload.matricula)
     empresa = _as_str(payload.empresa)
+    competencia = _as_str(payload.competencia)
 
     if not cpf:
         raise HTTPException(status_code=422, detail="Informe cpf.")
@@ -916,28 +922,38 @@ def buscar_informe_rendimentos(
         filtros.append("TRIM(nome_empresa::text) = TRIM(:empresa)")
         params["empresa"] = empresa
 
+    if competencia:
+        filtros.append("""
+            regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
+            regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
+        """)
+        params["competencia"] = competencia
+
     sql = text(f"""
         SELECT
-            codigo_empresa,
-            cpf_cnpj,
-            nome_empresa,
-            matricula,
-            cpf,
-            nome,
-            rendimento_ferias_01,
-            inss_02,
-            prevprivada_03,
-            pensao_04,
-            irrf_irrfferias_05,
-            ajucusto_02,
-            avisoprevio_06,
-            feriasabono_07,
-            rendimento_irrf_inss_dependente_01,
-            irrf_02,
-            plucro_03
+            MAX(codigo_empresa) AS codigo_empresa,
+            CASE
+                WHEN COUNT(DISTINCT cpf_cnpj_empresa) = 1 THEN MAX(cpf_cnpj_empresa)
+                ELSE 'MÚLTIPLOS CNPJS'
+            END AS cpf_cnpj_empresa,
+            MAX(nome_empresa) AS nome_empresa,
+            MAX(matricula) AS matricula,
+            MAX(cpf) AS cpf,
+            MAX(nome) AS nome,
+            MAX(competencia) AS competencia,
+            SUM(COALESCE(rendimento_ferias_01, 0)) AS rendimento_ferias_01,
+            SUM(COALESCE(inss_02, 0)) AS inss_02,
+            SUM(COALESCE(prevprivada_03, 0)) AS prevprivada_03,
+            SUM(COALESCE(pensao_04, 0)) AS pensao_04,
+            SUM(COALESCE(irrf_irrfferias_05, 0)) AS irrf_irrfferias_05,
+            SUM(COALESCE(ajucusto_02, 0)) AS ajucusto_02,
+            SUM(COALESCE(avisoprevio_06, 0)) AS avisoprevio_06,
+            SUM(COALESCE(feriasabono_07, 0)) AS feriasabono_07,
+            SUM(COALESCE(rendimento_irrf_inss_dependente_01, 0)) AS rendimento_irrf_inss_dependente_01,
+            SUM(COALESCE(irrf_02, 0)) AS irrf_02,
+            SUM(COALESCE(plucro_03, 0)) AS plucro_03
         FROM public.tb_informe_rendimentos
         WHERE {" AND ".join(filtros)}
-        ORDER BY nome, matricula
     """)
 
     rows = db.execute(sql, params).fetchall()
@@ -955,6 +971,7 @@ def buscar_informe_rendimentos(
         "cpf": cpf,
         "matricula": matricula,
         "empresa": empresa,
+        "competencia": competencia,
         "total": len(informes),
         "informes": informes,
     }
@@ -968,6 +985,7 @@ def montar_informe_rendimentos(
     cpf = _as_str(payload.cpf)
     matricula = _as_str(payload.matricula)
     empresa = _as_str(payload.empresa)
+    competencia = _as_str(payload.competencia)
 
     if not cpf:
         raise HTTPException(status_code=422, detail="Informe cpf.")
@@ -985,28 +1003,38 @@ def montar_informe_rendimentos(
         filtros.append("TRIM(nome_empresa::text) = TRIM(:empresa)")
         params["empresa"] = empresa
 
+    if competencia:
+        filtros.append("""
+            regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
+            regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
+        """)
+        params["competencia"] = competencia
+
     sql = text(f"""
-        SELECT
-            codigo_empresa,
-            cpf_cnpj,
-            nome_empresa,
-            matricula,
-            cpf,
-            nome,
-            rendimento_ferias_01,
-            inss_02,
-            prevprivada_03,
-            pensao_04,
-            irrf_irrfferias_05,
-            ajucusto_02,
-            avisoprevio_06,
-            feriasabono_07,
-            rendimento_irrf_inss_dependente_01,
-            irrf_02,
-            plucro_03
-        FROM public.tb_informe_rendimentos
-        WHERE {" AND ".join(filtros)}
-        ORDER BY nome, matricula
+    SELECT
+        MAX(codigo_empresa) AS codigo_empresa,
+        CASE
+            WHEN COUNT(DISTINCT cpf_cnpj_empresa) = 1 THEN MAX(cpf_cnpj_empresa)
+            ELSE 'MÚLTIPLOS CNPJS'
+        END AS cpf_cnpj_empresa,
+        MAX(nome_empresa) AS nome_empresa,
+        MAX(matricula) AS matricula,
+        MAX(cpf) AS cpf,
+        MAX(nome) AS nome,
+        MAX(competencia) AS competencia,
+        SUM(COALESCE(rendimento_ferias_01, 0)) AS rendimento_ferias_01,
+        SUM(COALESCE(inss_02, 0)) AS inss_02,
+        SUM(COALESCE(prevprivada_03, 0)) AS prevprivada_03,
+        SUM(COALESCE(pensao_04, 0)) AS pensao_04,
+        SUM(COALESCE(irrf_irrfferias_05, 0)) AS irrf_irrfferias_05,
+        SUM(COALESCE(ajucusto_02, 0)) AS ajucusto_02,
+        SUM(COALESCE(avisoprevio_06, 0)) AS avisoprevio_06,
+        SUM(COALESCE(feriasabono_07, 0)) AS feriasabono_07,
+        SUM(COALESCE(rendimento_irrf_inss_dependente_01, 0)) AS rendimento_irrf_inss_dependente_01,
+        SUM(COALESCE(irrf_02, 0)) AS irrf_02,
+        SUM(COALESCE(plucro_03, 0)) AS plucro_03
+    FROM public.tb_informe_rendimentos
+    WHERE {" AND ".join(filtros)}
     """)
 
     rows = db.execute(sql, params).fetchall()
@@ -1027,6 +1055,7 @@ def montar_informe_rendimentos(
         "cpf": cpf,
         "matricula": matricula,
         "empresa": empresa,
+        "competencia": competencia,
         "total": len(informes),
         "informes": informes,
         "pdf_base64": pdf_base64,
