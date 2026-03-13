@@ -15,6 +15,10 @@ from app.database.connection import get_db
 
 router = APIRouter()
 
+class BuscarCompetenciasInformeRendimentos(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    cpf: str = Field(..., min_length=1)
+    matricula: str = Field(..., min_length=1)
 
 class BuscarHolerite(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -34,26 +38,20 @@ class MontarHolerite(BaseModel):
         description="CPF sem formatação, 11 dígitos",
     )
 
-
 class BuscarInformeRendimentos(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
     matricula: Optional[str] = None
-    empresa: Optional[str] = None
     competencia: Optional[str] = None
-
 
 class MontarInformeRendimentos(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
     matricula: Optional[str] = None
-    empresa: Optional[str] = None
     competencia: Optional[str] = None
-
 
 def _only_yyyymm(s: str) -> str:
     return re.sub(r"\D", "", (s or ""))[:6]
-
 
 def _normaliza_anomes(valor: str) -> Optional[str]:
     v = (valor or "").strip()
@@ -895,6 +893,44 @@ def montar_holerite(payload: MontarHolerite, db: Session = Depends(get_db)):
         "pdf_base64": pdf_base64,
     }
 
+@router.post("/documents/informe-rendimentos/competencias")
+def listar_competencias_informe_rendimentos(
+    payload: BuscarCompetenciasInformeRendimentos = Body(...),
+    db: Session = Depends(get_db),
+):
+    cpf = _as_str(payload.cpf)
+    matricula = _as_str(payload.matricula)
+
+    if not cpf or not matricula:
+        raise HTTPException(status_code=422, detail="Informe cpf e matricula.")
+
+    sql = text("""
+        SELECT DISTINCT
+            regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') AS comp
+        FROM public.tb_informe_rendimentos
+        WHERE regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') =
+              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+          AND TRIM(matricula::text) = TRIM(:matricula)
+          AND competencia IS NOT NULL
+          AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') ~ '^[0-9]{4}$'
+        ORDER BY comp DESC
+    """)
+
+    rows = db.execute(sql, {"cpf": cpf, "matricula": matricula}).fetchall()
+
+    competencias = [
+        {"ano": int(r[0])}
+        for r in rows
+        if r[0] and len(r[0]) == 4
+    ]
+
+    if not competencias:
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhuma competência encontrada para os parâmetros informados."
+        )
+
+    return {"competencias": competencias}
 
 @router.post("/documents/informe-rendimentos/buscar")
 def buscar_informe_rendimentos(
@@ -903,7 +939,6 @@ def buscar_informe_rendimentos(
 ):
     cpf = _as_str(payload.cpf)
     matricula = _as_str(payload.matricula)
-    empresa = _as_str(payload.empresa)
     competencia = _as_str(payload.competencia)
 
     if not cpf:
@@ -917,10 +952,6 @@ def buscar_informe_rendimentos(
     if matricula:
         filtros.append("TRIM(matricula::text) = TRIM(:matricula)")
         params["matricula"] = matricula
-
-    if empresa:
-        filtros.append("TRIM(nome_empresa::text) = TRIM(:empresa)")
-        params["empresa"] = empresa
 
     if competencia:
         filtros.append("""
@@ -970,12 +1001,10 @@ def buscar_informe_rendimentos(
         "tipo": "informe_rendimentos",
         "cpf": cpf,
         "matricula": matricula,
-        "empresa": empresa,
         "competencia": competencia,
         "total": len(informes),
         "informes": informes,
     }
-
 
 @router.post("/documents/informe-rendimentos/montar")
 def montar_informe_rendimentos(
@@ -984,7 +1013,6 @@ def montar_informe_rendimentos(
 ):
     cpf = _as_str(payload.cpf)
     matricula = _as_str(payload.matricula)
-    empresa = _as_str(payload.empresa)
     competencia = _as_str(payload.competencia)
 
     if not cpf:
@@ -998,10 +1026,6 @@ def montar_informe_rendimentos(
     if matricula:
         filtros.append("TRIM(matricula::text) = TRIM(:matricula)")
         params["matricula"] = matricula
-
-    if empresa:
-        filtros.append("TRIM(nome_empresa::text) = TRIM(:empresa)")
-        params["empresa"] = empresa
 
     if competencia:
         filtros.append("""
@@ -1054,13 +1078,11 @@ def montar_informe_rendimentos(
         "tipo": "informe_rendimentos",
         "cpf": cpf,
         "matricula": matricula,
-        "empresa": empresa,
         "competencia": competencia,
         "total": len(informes),
         "informes": informes,
         "pdf_base64": pdf_base64,
     }
-
 
 @router.post("/documents/beneficios/buscar")
 def buscar_beneficios(payload: dict = Body(...), db: Session = Depends(get_db)):
