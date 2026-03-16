@@ -18,7 +18,6 @@ router = APIRouter()
 class BuscarCompetenciasInformeRendimentos(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
-    matricula: str = Field(..., min_length=1)
 
 class BuscarHolerite(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -41,14 +40,12 @@ class MontarHolerite(BaseModel):
 class BuscarInformeRendimentos(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
-    matricula: Optional[str] = None
-    competencia: Optional[str] = None
+    competencia: str = Field(..., min_length=1)
 
 class MontarInformeRendimentos(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
-    matricula: Optional[str] = None
-    competencia: Optional[str] = None
+    competencia: str = Field(..., min_length=1)
 
 def _only_yyyymm(s: str) -> str:
     return re.sub(r"\D", "", (s or ""))[:6]
@@ -134,8 +131,22 @@ def _cell_text(
     pdf.set_font("Arial", style, font_size)
     pdf.multi_cell(w, h, text, border=0, align=align)
 
+def _fmt_date_br(v: Any) -> str:
+    s = _as_str(v)
+    if not s:
+        return ""
 
-def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
+    s = s.split(" ")[0]
+
+    for fmt_in in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt_in).strftime("%d/%m/%Y")
+        except ValueError:
+            pass
+
+    return s
+
+def gerar_informe_rendimentos_pdf(registros: list[dict], complementos: list[dict]) -> bytes:
     if not registros:
         raise ValueError("Nenhum registro encontrado para montar o PDF.")
 
@@ -144,14 +155,41 @@ def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
     pdf = FPDF(format="A4", unit="mm")
     pdf.set_auto_page_break(auto=False)
 
+    def draw_q3_row(
+        pdf: FPDF,
+        y_row: float,
+        desc: str,
+        valor: str,
+        x_desc: float = 12,
+        w_desc: float = 145,
+        x_val: float = 160,
+        w_val: float = 35,
+        line_h: float = 4,
+        font_size: int = 8,
+    ) -> float:
+        pdf.set_xy(x_desc, y_row)
+        pdf.set_font("Arial", "", font_size)
+        pdf.multi_cell(w_desc, line_h, desc, border=0, align="L")
+        y_end = pdf.get_y()
+        row_h = y_end - y_row
+
+        if row_h < line_h:
+            row_h = line_h
+
+        pdf.set_xy(x_val, y_row)
+        pdf.set_font("Arial", "", font_size)
+        pdf.cell(w_val, row_h, valor, border=0, align="R")
+
+        return row_h
+
     for registro in registros:
         pdf.add_page()
         pdf.set_draw_color(0, 0, 0)
         pdf.set_line_width(0.2)
 
         codigo_empresa = _as_str(registro.get("codigo_empresa"))
-        cpf_cnpj_empresa = _as_str(registro.get("cpf_cnpj_empresa"))
-        nome_empresa = truncate(_as_str(registro.get("nome_empresa")), 90)
+        cpf_cnpj_cliente = _as_str(registro.get("cpf_cnpj_cliente"))
+        nome_cliente = truncate(_as_str(registro.get("nome_cliente")), 90)
         matricula = _as_str(registro.get("matricula"))
         cpf = _as_str(registro.get("cpf"))
         nome = truncate(_as_str(registro.get("nome")), 90)
@@ -163,7 +201,11 @@ def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
         pensao_04 = _fmt_money(registro.get("pensao_04"))
         irrf_irrfferias_05 = _fmt_money(registro.get("irrf_irrfferias_05"))
 
+        q4_01 = "0,00"
         ajucusto_02 = _fmt_money(registro.get("ajucusto_02"))
+        q4_03 = "0,00"
+        q4_04 = "0,00"
+        q4_05 = "0,00"
         avisoprevio_06 = _fmt_money(registro.get("avisoprevio_06"))
         feriasabono_07 = _fmt_money(registro.get("feriasabono_07"))
 
@@ -172,6 +214,29 @@ def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
         )
         irrf_02 = _fmt_money(registro.get("irrf_02"))
         plucro_03 = _fmt_money(registro.get("plucro_03"))
+
+        q6_01 = "0,00"
+        q6_02 = "0,00"
+        q6_03 = "0,00"
+        q6_04 = "0,00"
+        q6_05 = "0,00"
+        q6_06 = "0,00"
+        q6_numero_processo = "0"
+        q6_quantidade_meses = "0"
+        q6_natureza_rendimento = "0,00"
+
+        abono_pecuniario = _fmt_money(registro.get("abono_pecuniario"))
+        rendimentos_isentos = _fmt_money(registro.get("rendimentos_isentos"))
+
+        try:
+            ano_calendario = str(int(str(competencia).strip()))
+            exercicio = str(int(ano_calendario) + 1)
+        except Exception:
+            ano_calendario = _as_str(competencia) or "2025"
+            try:
+                exercicio = str(int(ano_calendario) + 1)
+            except Exception:
+                exercicio = "2026"
 
         try:
             pdf.image(GOVERNO_LOGO_PATH, x=10, y=7, w=24)
@@ -186,7 +251,7 @@ def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
             "Ministério da Fazenda\n"
             "Secretaria Especial da Receita Federal do Brasil\n"
             "Imposto sobre a Renda da Pessoa Física\n"
-            "Exercício de 2026",
+            f"Exercício de {exercicio}",
             border=0,
             align="C",
         )
@@ -198,7 +263,7 @@ def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
             4.5,
             "COMPROVANTE DE RENDIMENTOS PAGOS E DE\n"
             "IMPOSTO SOBRE A RENDA RETIDO NA FONTE\n"
-            "ANO-CALENDÁRIO 2025",
+            f"ANO-CALENDÁRIO {ano_calendario}",
             border=0,
             align="C",
         )
@@ -220,11 +285,11 @@ def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
         pdf.line(55, y + 6, 55, y + 18)
         _cell_text(pdf, 12, y + 7, 40, 4, "CNPJ", 7, "B")
         _cell_text(pdf, 57, y + 7, 140, 4, "Nome Empresarial", 7, "B")
-        _cell_text(pdf, 12, y + 11, 40, 4, cpf_cnpj_empresa, 8, "")
-        _cell_text(pdf, 57, y + 11, 140, 4, nome_empresa, 8, "")
+        _cell_text(pdf, 12, y + 11, 40, 4, cpf_cnpj_cliente, 8, "")
+        _cell_text(pdf, 57, y + 11, 140, 4, nome_cliente, 8, "")
 
         y = 59
-        _draw_box(pdf, 10, y, 190, 24)
+        _draw_box(pdf, 10, y, 190, 28)
         _cell_text(pdf, 11, y + 1, 188, 4, "2. PESSOA FÍSICA BENEFICIÁRIA DOS RENDIMENTOS", 8, "B")
         pdf.line(10, y + 6, 200, y + 6)
         pdf.line(55, y + 6, 55, y + 16)
@@ -233,10 +298,12 @@ def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
         _cell_text(pdf, 12, y + 11, 40, 4, cpf, 8, "")
         _cell_text(pdf, 57, y + 11, 140, 4, nome, 8, "")
         pdf.line(10, y + 16, 200, y + 16)
-        _cell_text(pdf, 12, y + 17, 180, 4, f"Matrícula: {matricula}", 8, "")
+        _cell_text(pdf, 12, y + 17, 100, 4, "Natureza do Rendimento", 7, "B")
+        _cell_text(pdf, 12, y + 21, 120, 4, "Rendimento do Trabalho Assalariado (0561)", 8, "")
+        _cell_text(pdf, 150, y + 21, 45, 4, f"Matrícula: {matricula}", 8, "", "R")
 
-        y = 85
-        _draw_box(pdf, 10, y, 190, 34)
+        y = 89
+        _draw_box(pdf, 10, y, 190, 30)
         _cell_text(
             pdf,
             11,
@@ -251,39 +318,44 @@ def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
         pdf.line(10, y + 6, 200, y + 6)
 
         linhas_q3 = [
-            ("01. Total dos rendimentos de férias", rendimento_ferias_01),
+            ("01. Total dos rendimentos (inclusive férias)", rendimento_ferias_01),
             ("02. Contribuição previdenciária oficial", inss_02),
-            ("03. Contribuição à previdência privada", prevprivada_03),
+            (
+                "03. Contribuições a entidades de previdência complementar, pública ou privada, e a fundos de aposentadoria programada individual (FAPI)",
+                prevprivada_03,
+            ),
             ("04. Pensão alimentícia", pensao_04),
             ("05. Imposto sobre a renda retido na fonte", irrf_irrfferias_05),
         ]
 
         y_line = y + 7
         for desc, valor in linhas_q3:
-            _cell_text(pdf, 12, y_line, 145, 4, desc, 8, "")
-            _cell_text(pdf, 160, y_line, 35, 4, valor, 8, "", "R")
-            y_line += 5.2
+            row_h = draw_q3_row(pdf, y_line, desc, valor, line_h=3.2, font_size=7)
+            y_line += row_h + 0.2
 
-        y = 121
+        y = 122
         _draw_box(pdf, 10, y, 190, 30)
         _cell_text(pdf, 11, y + 1, 135, 4, "4. RENDIMENTOS ISENTOS E NÃO TRIBUTÁVEIS", 8, "B")
         _cell_text(pdf, 160, y + 1, 35, 4, "VALORES EM REAIS", 7, "B", "R")
         pdf.line(10, y + 6, 200, y + 6)
 
         linhas_q4 = [
-            ("02. Diárias e ajuda de custo", ajucusto_02),
-            ("06. Aviso prévio indenizado", avisoprevio_06),
-            ("07. Abono pecuniário de férias", feriasabono_07),
+            ("01. Parcela isenta dos proventos de aposentadoria, reserva remunerada, reforma e pensão (65 anos ou mais)", q4_01),
+            ("02. Diárias e ajudas de custo", ajucusto_02),
+            ("03. Pensão e proventos de aposentadoria ou reforma por moléstia grave e aposentadoria ou reforma por acidente em serviço", q4_03),
+            ("04. Lucros e dividendos apurados a partir de 1996 pagos por pessoa jurídica", q4_04),
+            ("05. Valores pagos ao titular ou sócio da microempresa ou empresa de pequeno porte, exceto pró-labore, aluguéis ou serviços prestados", q4_05),
+            ("06. Indenizações por rescisão de contrato de trabalho, inclusive a título de PDV, e por acidente de trabalho", avisoprevio_06),
+            ("07. Outros", feriasabono_07),
         ]
 
         y_line = y + 7
         for desc, valor in linhas_q4:
-            _cell_text(pdf, 12, y_line, 145, 5, desc, 8, "")
-            _cell_text(pdf, 160, y_line, 35, 5, valor, 8, "", "R")
-            y_line += 6.7
+            row_h = draw_q3_row(pdf, y_line, desc, valor, line_h=3.0, font_size=6)
+            y_line += row_h + 0.15
 
-        y = 153
-        _draw_box(pdf, 10, y, 190, 26)
+        y = 155
+        _draw_box(pdf, 10, y, 190, 22)
         _cell_text(
             pdf,
             11,
@@ -298,56 +370,115 @@ def gerar_informe_rendimentos_pdf(registros: list[dict]) -> bytes:
         pdf.line(10, y + 6, 200, y + 6)
 
         linhas_q5 = [
-            ("01. Rendimentos tributação exclusiva", rendimento_irrf_inss_dependente_01),
-            ("02. Imposto sobre a renda na fonte", irrf_02),
-            ("03. Participação nos lucros ou resultados", plucro_03),
+            ("01. Décimo terceiro salário", rendimento_irrf_inss_dependente_01),
+            ("02. Imposto sobre a renda retido na fonte sobre décimo terceiro salário", irrf_02),
+            ("03. Outros", plucro_03),
         ]
 
         y_line = y + 7
         for desc, valor in linhas_q5:
-            _cell_text(pdf, 12, y_line, 145, 5, desc, 8, "")
-            _cell_text(pdf, 160, y_line, 35, 5, valor, 8, "", "R")
-            y_line += 6
+            _cell_text(pdf, 12, y_line, 145, 5, desc, 7, "")
+            _cell_text(pdf, 160, y_line, 35, 5, valor, 7, "", "R")
+            y_line += 3.5
 
-        y = 181
-        _draw_box(pdf, 10, y, 190, 48)
+        y = 180
+        _draw_box(pdf, 10, y, 190, 28)
+        _cell_text(
+            pdf,
+            11,
+            y + 1,
+            150,
+            4,
+            "6. RENDIMENTOS RECEBIDOS ACUMULADAMENTE",
+            8,
+            "B",
+        )
+        _cell_text(pdf, 160, y + 1, 35, 4, "VALORES EM REAIS", 7, "B", "R")
+        pdf.line(10, y + 6, 200, y + 6)
+
+        linhas_q6 = [
+            ("01. Total dos rendimentos tributáveis", q6_01),
+            ("02. Exclusão: despesas com a ação judicial", q6_02),
+            ("03. Dedução: contribuição previdenciária oficial", q6_03),
+            ("04. Dedução: pensão alimentícia", q6_04),
+            ("05. Dedução: imposto sobre a renda retido na fonte", q6_05),
+            ("06. Rendimentos isentos de pensão, aposentadoria ou reforma por moléstia grave ou acidente em serviço", q6_06),
+        ]
+
+        y_line = y + 7
+        for desc, valor in linhas_q6:
+            row_h = draw_q3_row(pdf, y_line, desc, valor, line_h=2.8, font_size=6)
+            y_line += row_h + 0.1
+
+        y = 210
+        _draw_box(pdf, 10, y, 190, 16)
+        _cell_text(pdf, 11, y + 1, 188, 4, "6.1 INFORMAÇÕES COMPLEMENTARES - RENDIMENTOS RECEBIDOS ACUMULADAMENTE", 7, "B")
+        pdf.line(10, y + 6, 200, y + 6)
+        pdf.line(85, y + 6, 85, y + 16)
+        pdf.line(130, y + 6, 130, y + 16)
+        _cell_text(pdf, 12, y + 7, 70, 4, "Número do processo", 6, "B")
+        _cell_text(pdf, 87, y + 7, 40, 4, "Quantidade de meses", 6, "B")
+        _cell_text(pdf, 132, y + 7, 63, 4, "Natureza do rendimento", 6, "B")
+        _cell_text(pdf, 12, y + 11, 70, 4, q6_numero_processo, 7, "")
+        _cell_text(pdf, 87, y + 11, 40, 4, q6_quantidade_meses, 7, "")
+        _cell_text(pdf, 132, y + 11, 63, 4, q6_natureza_rendimento, 7, "")
+
+        y = 228
+        _draw_box(pdf, 10, y, 190, 45)
         _cell_text(pdf, 11, y + 1, 188, 4, "7. INFORMAÇÕES COMPLEMENTARES", 8, "B")
         pdf.line(10, y + 6, 200, y + 6)
 
-        info_complementar = (
-            f"Código da empresa: {codigo_empresa}\n"
-            f"Fonte pagadora: {nome_empresa}\n"
-            f"CPF do beneficiário: {cpf}\n"
-            f"Matrícula: {matricula}\n"
-            f"Competência: {competencia}\n"
-            f"Comprovante gerado a partir das informações registradas no banco de dados."
-        )
-        _cell_text(pdf, 12, y + 8, 184, 4, info_complementar, 8, "")
+        linhas_info = [
+            f"Rendimentos Isentos: {rendimentos_isentos}",
+            f"Abono Pecuniário: {abono_pecuniario}",
+            # f"Código da empresa: {codigo_empresa}",
+            # f"Fonte pagadora: {nome_cliente}",
+            # f"CPF do beneficiário: {cpf}",
+            # f"Competência: {competencia}",
+        ]
 
-        y = 231
-        _draw_box(pdf, 10, y, 190, 26)
+        if complementos:
+            linhas_info.append("Pagamentos a plano privado de assistência à saúde:")
+            for comp in complementos:
+                cnpj_operadora = _as_str(comp.get("cnpj_operadora"))
+                nome_operadora = _as_str(comp.get("nome_operadora"))
+                cpf_comp = _as_str(comp.get("cpf"))
+                data_nascimento = _fmt_date_br(comp.get("data_nascimento"))
+                nome_titular = _as_str(comp.get("nome_titular"))
+                valor = _fmt_money(comp.get("valor"))
+
+                linhas_info.append(
+                    f"CNPJ da oper: {cnpj_operadora} | Operador: {nome_operadora} | "
+                    f"CPF: {cpf_comp} | Dt nasc.: {data_nascimento} | "
+                    f"Titular: {nome_titular} | Vlr: {valor}"
+                )
+
+        info_complementar = "\n".join(linhas_info)
+        _cell_text(pdf, 12, y + 7, 184, 2.8, info_complementar, 6, "")
+
+        y = 277
+        _draw_box(pdf, 10, y, 190, 14)
         _cell_text(pdf, 11, y + 1, 188, 4, "8. RESPONSÁVEL PELAS INFORMAÇÕES", 8, "B")
         pdf.line(10, y + 6, 200, y + 6)
-        pdf.line(120, y + 6, 120, y + 26)
+        pdf.line(120, y + 6, 120, y + 14)
         _cell_text(pdf, 12, y + 7, 105, 4, "Nome", 7, "B")
         _cell_text(pdf, 122, y + 7, 30, 4, "Data", 7, "B")
         _cell_text(pdf, 155, y + 7, 40, 4, "Assinatura", 7, "B")
-        _cell_text(pdf, 12, y + 12, 105, 4, "RESPONSÁVEL PELAS INFORMAÇÕES", 8, "")
-        _cell_text(pdf, 122, y + 12, 30, 4, datetime.now().strftime("%d/%m/%Y"), 8, "")
-        _cell_text(pdf, 155, y + 12, 40, 4, "", 8, "")
+        _cell_text(pdf, 12, y + 10, 105, 4, "RESPONSÁVEL PELAS INFORMAÇÕES", 7, "")
+        _cell_text(pdf, 122, y + 10, 30, 4, datetime.now().strftime("%d/%m/%Y"), 7, "")
+        _cell_text(pdf, 155, y + 10, 40, 4, "", 7, "")
 
-        pdf.set_xy(10, 262)
-        pdf.set_font("Arial", "", 6)
+        pdf.set_xy(10, 292)
+        pdf.set_font("Arial", "", 5.5)
         pdf.multi_cell(
             190,
-            3.5,
+            2.8,
             "Aprovado pela IN RFB nº 1.682, de 28 de dezembro de 2016.",
             border=0,
             align="L",
         )
 
     return pdf.output(dest="S").encode("latin-1")
-
 
 def gerar_recibo(cabecalho: dict, eventos: list[dict], rodape: dict, page_number: int = 1) -> bytes:
     cabecalho["matricula"] = pad_left(cabecalho["matricula"], 6)
@@ -899,10 +1030,9 @@ def listar_competencias_informe_rendimentos(
     db: Session = Depends(get_db),
 ):
     cpf = _as_str(payload.cpf)
-    matricula = _as_str(payload.matricula)
 
-    if not cpf or not matricula:
-        raise HTTPException(status_code=422, detail="Informe cpf e matricula.")
+    if not cpf:
+        raise HTTPException(status_code=422, detail="Informe cpf.")
 
     sql = text("""
         SELECT DISTINCT
@@ -910,13 +1040,12 @@ def listar_competencias_informe_rendimentos(
         FROM public.tb_informe_rendimentos
         WHERE regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') =
               regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
-          AND TRIM(matricula::text) = TRIM(:matricula)
           AND competencia IS NOT NULL
           AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') ~ '^[0-9]{4}$'
         ORDER BY comp DESC
     """)
 
-    rows = db.execute(sql, {"cpf": cpf, "matricula": matricula}).fetchall()
+    rows = db.execute(sql, {"cpf": cpf}).fetchall()
 
     competencias = [
         {"ano": int(r[0])}
@@ -938,36 +1067,20 @@ def buscar_informe_rendimentos(
     db: Session = Depends(get_db),
 ):
     cpf = _as_str(payload.cpf)
-    matricula = _as_str(payload.matricula)
     competencia = _as_str(payload.competencia)
 
-    if not cpf:
-        raise HTTPException(status_code=422, detail="Informe cpf.")
+    if not cpf or not competencia:
+        raise HTTPException(status_code=422, detail="Informe cpf e competencia.")
 
-    filtros = [
-        "regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') = regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')"
-    ]
-    params: Dict[str, Any] = {"cpf": cpf}
-
-    if matricula:
-        filtros.append("TRIM(matricula::text) = TRIM(:matricula)")
-        params["matricula"] = matricula
-
-    if competencia:
-        filtros.append("""
-            regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
-            regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
-        """)
-        params["competencia"] = competencia
-
-    sql = text(f"""
+    sql = text("""
         SELECT
             MAX(codigo_empresa) AS codigo_empresa,
+            MAX(codigo_cliente) AS codigo_cliente,
             CASE
-                WHEN COUNT(DISTINCT cpf_cnpj_empresa) = 1 THEN MAX(cpf_cnpj_empresa)
+                WHEN COUNT(DISTINCT cpf_cnpj_cliente) = 1 THEN MAX(cpf_cnpj_cliente)
                 ELSE 'MÚLTIPLOS CNPJS'
-            END AS cpf_cnpj_empresa,
-            MAX(nome_empresa) AS nome_empresa,
+            END AS cpf_cnpj_cliente,
+            MAX(nome_cliente) AS nome_cliente,
             MAX(matricula) AS matricula,
             MAX(cpf) AS cpf,
             MAX(nome) AS nome,
@@ -982,28 +1095,64 @@ def buscar_informe_rendimentos(
             SUM(COALESCE(feriasabono_07, 0)) AS feriasabono_07,
             SUM(COALESCE(rendimento_irrf_inss_dependente_01, 0)) AS rendimento_irrf_inss_dependente_01,
             SUM(COALESCE(irrf_02, 0)) AS irrf_02,
-            SUM(COALESCE(plucro_03, 0)) AS plucro_03
+            SUM(COALESCE(plucro_03, 0)) AS plucro_03,
+            SUM(COALESCE(abono_pecuniario, 0)) AS abono_pecuniario,
+            SUM(COALESCE(rendimentos_isentos, 0)) AS rendimentos_isentos
         FROM public.tb_informe_rendimentos
-        WHERE {" AND ".join(filtros)}
+        WHERE regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') =
+              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+          AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
+              regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
     """)
 
-    rows = db.execute(sql, params).fetchall()
+    row = db.execute(sql, {"cpf": cpf, "competencia": competencia}).first()
 
-    if not rows:
+    if not row:
         raise HTTPException(
             status_code=404,
             detail="Nenhum informe de rendimentos encontrado para os critérios informados."
         )
 
-    informes = [dict(r._mapping) for r in rows]
+    informe = dict(row._mapping)
+
+    if not informe.get("cpf"):
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhum informe de rendimentos encontrado para os critérios informados."
+        )
+
+    sql_complementos = text("""
+        SELECT
+            codigo_empresa,
+            cnpj_operadora,
+            nome_operadora,
+            cpf,
+            data_nascimento,
+            nome_titular,
+            valor,
+            competencia
+        FROM public.tb_informe_rendimentos_complementos_beneficios
+        WHERE regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') =
+              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+          AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
+              regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
+        ORDER BY nome_titular, data_nascimento
+    """)
+
+    comp_rows = db.execute(
+        sql_complementos,
+        {"cpf": cpf, "competencia": competencia},
+    ).fetchall()
+
+    complementos = [dict(r._mapping) for r in comp_rows]
 
     return {
         "tipo": "informe_rendimentos",
         "cpf": cpf,
-        "matricula": matricula,
         "competencia": competencia,
-        "total": len(informes),
-        "informes": informes,
+        "total": 1,
+        "informes": [informe],
+        "complementos": complementos,
     }
 
 @router.post("/documents/informe-rendimentos/montar")
@@ -1012,75 +1161,95 @@ def montar_informe_rendimentos(
     db: Session = Depends(get_db),
 ):
     cpf = _as_str(payload.cpf)
-    matricula = _as_str(payload.matricula)
     competencia = _as_str(payload.competencia)
 
-    if not cpf:
-        raise HTTPException(status_code=422, detail="Informe cpf.")
+    if not cpf or not competencia:
+        raise HTTPException(status_code=422, detail="Informe cpf e competencia.")
 
-    filtros = [
-        "regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') = regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')"
-    ]
-    params: Dict[str, Any] = {"cpf": cpf}
-
-    if matricula:
-        filtros.append("TRIM(matricula::text) = TRIM(:matricula)")
-        params["matricula"] = matricula
-
-    if competencia:
-        filtros.append("""
-            regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
-            regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
-        """)
-        params["competencia"] = competencia
-
-    sql = text(f"""
-    SELECT
-        MAX(codigo_empresa) AS codigo_empresa,
-        CASE
-            WHEN COUNT(DISTINCT cpf_cnpj_empresa) = 1 THEN MAX(cpf_cnpj_empresa)
-            ELSE 'MÚLTIPLOS CNPJS'
-        END AS cpf_cnpj_empresa,
-        MAX(nome_empresa) AS nome_empresa,
-        MAX(matricula) AS matricula,
-        MAX(cpf) AS cpf,
-        MAX(nome) AS nome,
-        MAX(competencia) AS competencia,
-        SUM(COALESCE(rendimento_ferias_01, 0)) AS rendimento_ferias_01,
-        SUM(COALESCE(inss_02, 0)) AS inss_02,
-        SUM(COALESCE(prevprivada_03, 0)) AS prevprivada_03,
-        SUM(COALESCE(pensao_04, 0)) AS pensao_04,
-        SUM(COALESCE(irrf_irrfferias_05, 0)) AS irrf_irrfferias_05,
-        SUM(COALESCE(ajucusto_02, 0)) AS ajucusto_02,
-        SUM(COALESCE(avisoprevio_06, 0)) AS avisoprevio_06,
-        SUM(COALESCE(feriasabono_07, 0)) AS feriasabono_07,
-        SUM(COALESCE(rendimento_irrf_inss_dependente_01, 0)) AS rendimento_irrf_inss_dependente_01,
-        SUM(COALESCE(irrf_02, 0)) AS irrf_02,
-        SUM(COALESCE(plucro_03, 0)) AS plucro_03
-    FROM public.tb_informe_rendimentos
-    WHERE {" AND ".join(filtros)}
+    sql = text("""
+        SELECT
+            MAX(codigo_empresa) AS codigo_empresa,
+            MAX(codigo_cliente) AS codigo_cliente,
+            CASE
+                WHEN COUNT(DISTINCT cpf_cnpj_cliente) = 1 THEN MAX(cpf_cnpj_cliente)
+                ELSE 'MÚLTIPLOS CNPJS'
+            END AS cpf_cnpj_cliente,
+            MAX(nome_cliente) AS nome_cliente,
+            MAX(matricula) AS matricula,
+            MAX(cpf) AS cpf,
+            MAX(nome) AS nome,
+            MAX(competencia) AS competencia,
+            SUM(COALESCE(rendimento_ferias_01, 0)) AS rendimento_ferias_01,
+            SUM(COALESCE(inss_02, 0)) AS inss_02,
+            SUM(COALESCE(prevprivada_03, 0)) AS prevprivada_03,
+            SUM(COALESCE(pensao_04, 0)) AS pensao_04,
+            SUM(COALESCE(irrf_irrfferias_05, 0)) AS irrf_irrfferias_05,
+            SUM(COALESCE(ajucusto_02, 0)) AS ajucusto_02,
+            SUM(COALESCE(avisoprevio_06, 0)) AS avisoprevio_06,
+            SUM(COALESCE(feriasabono_07, 0)) AS feriasabono_07,
+            SUM(COALESCE(rendimento_irrf_inss_dependente_01, 0)) AS rendimento_irrf_inss_dependente_01,
+            SUM(COALESCE(irrf_02, 0)) AS irrf_02,
+            SUM(COALESCE(plucro_03, 0)) AS plucro_03,
+            SUM(COALESCE(abono_pecuniario, 0)) AS abono_pecuniario,
+            SUM(COALESCE(rendimentos_isentos, 0)) AS rendimentos_isentos
+        FROM public.tb_informe_rendimentos
+        WHERE regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') =
+              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+          AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
+              regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
     """)
 
-    rows = db.execute(sql, params).fetchall()
+    row = db.execute(sql, {"cpf": cpf, "competencia": competencia}).first()
 
-    if not rows:
+    if not row:
         raise HTTPException(
             status_code=404,
             detail="Nenhum informe de rendimentos encontrado para os critérios informados."
         )
 
-    informes = [dict(r._mapping) for r in rows]
+    informe = dict(row._mapping)
 
-    raw_pdf = gerar_informe_rendimentos_pdf(informes)
+    if not informe.get("cpf"):
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhum informe de rendimentos encontrado para os critérios informados."
+        )
+
+    sql_complementos = text("""
+        SELECT
+            codigo_empresa,
+            cnpj_operadora,
+            nome_operadora,
+            cpf,
+            data_nascimento,
+            nome_titular,
+            valor,
+            competencia
+        FROM public.tb_informe_rendimentos_complementos_beneficios
+        WHERE regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') =
+              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+          AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
+              regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
+        ORDER BY nome_titular, data_nascimento
+    """)
+
+    comp_rows = db.execute(
+        sql_complementos,
+        {"cpf": cpf, "competencia": competencia},
+    ).fetchall()
+
+    complementos = [dict(r._mapping) for r in comp_rows]
+
+    raw_pdf = gerar_informe_rendimentos_pdf([informe], complementos)
     pdf_base64 = base64.b64encode(raw_pdf).decode("utf-8")
 
     return {
         "tipo": "informe_rendimentos",
         "cpf": cpf,
-        "matricula": matricula,
         "competencia": competencia,
-        "total": len(informes),
-        "informes": informes,
+        "total": 1,
+        "informes": [informe],
+        "complementos": complementos,
         "pdf_base64": pdf_base64,
     }
 
