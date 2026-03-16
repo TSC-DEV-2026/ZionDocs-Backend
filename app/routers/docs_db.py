@@ -15,9 +15,11 @@ from app.database.connection import get_db
 
 router = APIRouter()
 
+
 class BuscarCompetenciasInformeRendimentos(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
+
 
 class BuscarHolerite(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -37,18 +39,22 @@ class MontarHolerite(BaseModel):
         description="CPF sem formatação, 11 dígitos",
     )
 
+
 class BuscarInformeRendimentos(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
     competencia: str = Field(..., min_length=1)
+
 
 class MontarInformeRendimentos(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
     competencia: str = Field(..., min_length=1)
 
+
 def _only_yyyymm(s: str) -> str:
     return re.sub(r"\D", "", (s or ""))[:6]
+
 
 def _normaliza_anomes(valor: str) -> Optional[str]:
     v = (valor or "").strip()
@@ -131,6 +137,7 @@ def _cell_text(
     pdf.set_font("Arial", style, font_size)
     pdf.multi_cell(w, h, text, border=0, align=align)
 
+
 def _fmt_date_br(v: Any) -> str:
     s = _as_str(v)
     if not s:
@@ -146,7 +153,12 @@ def _fmt_date_br(v: Any) -> str:
 
     return s
 
-def gerar_informe_rendimentos_pdf(registros: list[dict], complementos: list[dict]) -> bytes:
+
+def gerar_informe_rendimentos_pdf(
+    registros: list[dict],
+    complementos: list[dict],
+    pensoes: list[dict],
+) -> bytes:
     if not registros:
         raise ValueError("Nenhum registro encontrado para montar o PDF.")
 
@@ -431,10 +443,6 @@ def gerar_informe_rendimentos_pdf(registros: list[dict], complementos: list[dict
         linhas_info = [
             f"Rendimentos Isentos: {rendimentos_isentos}",
             f"Abono Pecuniário: {abono_pecuniario}",
-            # f"Código da empresa: {codigo_empresa}",
-            # f"Fonte pagadora: {nome_cliente}",
-            # f"CPF do beneficiário: {cpf}",
-            # f"Competência: {competencia}",
         ]
 
         if complementos:
@@ -451,6 +459,22 @@ def gerar_informe_rendimentos_pdf(registros: list[dict], complementos: list[dict
                     f"CNPJ da oper: {cnpj_operadora} | Operador: {nome_operadora} | "
                     f"CPF: {cpf_comp} | Dt nasc.: {data_nascimento} | "
                     f"Titular: {nome_titular} | Vlr: {valor}"
+                )
+
+        if pensoes:
+            for pens in pensoes:
+                cpf_pens = _as_str(pens.get("cpf_beneficiario"))
+                data_nascimento = _fmt_date_br(pens.get("data_nascimento"))
+                nome_pens = _as_str(pens.get("nome"))
+                parentesco = _as_str(pens.get("parentesco"))
+                valor = _fmt_money(pens.get("valor"))
+                e13 = pens.get("e13")
+
+                prefixo = "(Pensionista 13º CPF:" if bool(e13) else "(Pensionista CPF:"
+
+                linhas_info.append(
+                    f"{prefixo} {cpf_pens} | Dt nasc.: {data_nascimento} | "
+                    f"Nome: {nome_pens} | Parentesco: {parentesco} | Vlr: {valor})"
                 )
 
         info_complementar = "\n".join(linhas_info)
@@ -479,6 +503,7 @@ def gerar_informe_rendimentos_pdf(registros: list[dict], complementos: list[dict
         )
 
     return pdf.output(dest="S").encode("latin-1")
+
 
 def gerar_recibo(cabecalho: dict, eventos: list[dict], rodape: dict, page_number: int = 1) -> bytes:
     cabecalho["matricula"] = pad_left(cabecalho["matricula"], 6)
@@ -790,13 +815,21 @@ def buscar_holerite(payload: BuscarHolerite = Body(...), db: Session = Depends(g
     comp_norm_input = _only_yyyymm(_normaliza_anomes(competencia) or competencia)
 
     def _table_exists(schema: str, table: str) -> bool:
-        q = text("""SELECT 1 FROM information_schema.tables
-                    WHERE table_schema=:schema AND table_name=:table LIMIT 1""")
+        q = text("""
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema=:schema AND table_name=:table
+            LIMIT 1
+        """)
         return db.execute(q, {"schema": schema, "table": table}).first() is not None
 
     def _column_exists(schema: str, table: str, column: str) -> bool:
-        q = text("""SELECT 1 FROM information_schema.columns
-                    WHERE table_schema=:schema AND table_name=:table AND column_name=:column LIMIT 1""")
+        q = text("""
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema=:schema AND table_name=:table AND column_name=:column
+            LIMIT 1
+        """)
         return db.execute(q, {"schema": schema, "table": table, "column": column}).first() is not None
 
     schema_status = "public"
@@ -1024,6 +1057,7 @@ def montar_holerite(payload: MontarHolerite, db: Session = Depends(get_db)):
         "pdf_base64": pdf_base64,
     }
 
+
 @router.post("/documents/informe-rendimentos/competencias")
 def listar_competencias_informe_rendimentos(
     payload: BuscarCompetenciasInformeRendimentos = Body(...),
@@ -1060,6 +1094,7 @@ def listar_competencias_informe_rendimentos(
         )
 
     return {"competencias": competencias}
+
 
 @router.post("/documents/informe-rendimentos/buscar")
 def buscar_informe_rendimentos(
@@ -1155,6 +1190,7 @@ def buscar_informe_rendimentos(
         "complementos": complementos,
     }
 
+
 @router.post("/documents/informe-rendimentos/montar")
 def montar_informe_rendimentos(
     payload: MontarInformeRendimentos = Body(...),
@@ -1240,7 +1276,31 @@ def montar_informe_rendimentos(
 
     complementos = [dict(r._mapping) for r in comp_rows]
 
-    raw_pdf = gerar_informe_rendimentos_pdf([informe], complementos)
+    sql_pensoes = text("""
+        SELECT
+            cpf_beneficiario,
+            data_nascimento,
+            nome,
+            parentesco,
+            e13,
+            competencia,
+            valor
+        FROM public.tb_informe_rendimentos_complementos_pensoes
+        WHERE regexp_replace(TRIM(cpf_titular::text), '[^0-9]', '', 'g') =
+            regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+        AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
+            regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
+        ORDER BY nome, data_nascimento
+    """)
+
+    pens_rows = db.execute(
+        sql_pensoes,
+        {"cpf": cpf, "competencia": competencia},
+    ).fetchall()
+
+    pensionistas = [dict(r._mapping) for r in pens_rows]
+
+    raw_pdf = gerar_informe_rendimentos_pdf([informe], complementos, pensionistas)
     pdf_base64 = base64.b64encode(raw_pdf).decode("utf-8")
 
     return {
@@ -1250,8 +1310,10 @@ def montar_informe_rendimentos(
         "total": 1,
         "informes": [informe],
         "complementos": complementos,
+        "pensionistas": pensionistas,
         "pdf_base64": pdf_base64,
     }
+
 
 @router.post("/documents/beneficios/buscar")
 def buscar_beneficios(payload: dict = Body(...), db: Session = Depends(get_db)):
