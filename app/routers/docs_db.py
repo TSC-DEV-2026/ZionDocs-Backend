@@ -414,43 +414,6 @@ def gerar_recibo_ferias_pdf(dados: dict) -> bytes:
                 pass
         return s
 
-    def fmt_date_extenso(v: Any) -> str:
-        s = as_str(v)
-        if not s:
-            return ""
-        s = s.split(" ")[0]
-        formatos = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d")
-        for fmt in formatos:
-            try:
-                return datetime.strptime(s, fmt).strftime("%d de %B de %Y").replace(
-                    "January", "janeiro"
-                ).replace(
-                    "February", "fevereiro"
-                ).replace(
-                    "March", "março"
-                ).replace(
-                    "April", "abril"
-                ).replace(
-                    "May", "maio"
-                ).replace(
-                    "June", "junho"
-                ).replace(
-                    "July", "julho"
-                ).replace(
-                    "August", "agosto"
-                ).replace(
-                    "September", "setembro"
-                ).replace(
-                    "October", "outubro"
-                ).replace(
-                    "November", "novembro"
-                ).replace(
-                    "December", "dezembro"
-                )
-            except ValueError:
-                pass
-        return s
-
     def truncate_local(text: Any, max_len: int) -> str:
         s = as_str(text)
         return s if len(s) <= max_len else s[: max_len - 3] + "..."
@@ -616,14 +579,23 @@ def gerar_recibo_ferias_pdf(dados: dict) -> bytes:
 
     empregado_linha = as_str(cab.get("empregado_linha"))
     if not empregado_linha:
-        partes = [
-            "EMPREGADO:",
-            as_str(cab.get("codigo_empregado")),
-            as_str(cab.get("pis")),
-            fmt_cpf(cab.get("cpf")),
-            truncate_local(cab.get("nome"), 45),
+        cod_empresa = as_str(cab.get("empresa"))
+        cod_filial = as_str(cab.get("cod_filial"))
+        matricula = as_str(cab.get("codigo_empregado"))
+        codigolote = as_str(cab.get("codigolote"))
+        cod_cliente = as_str(cab.get("cliente_nome"))
+        nome_empregado_notif = truncate_local(cab.get("nome"), 45)
+
+        partes_empregado = [
+            cod_empresa,
+            cod_filial,
+            matricula,
+            codigolote,
+            cod_cliente,
+            nome_empregado_notif,
         ]
-        empregado_linha = " - ".join([p for p in partes if p and p != "EMPREGADO:"])
+
+        empregado_linha = " - ".join([p for p in partes_empregado if p])
         empregado_linha = f"EMPREGADO: {empregado_linha}"
 
     funcao_admissao = as_str(cab.get("funcao_admissao"))
@@ -770,7 +742,6 @@ def gerar_recibo_ferias_pdf(dados: dict) -> bytes:
     cell_text(pdf, 114, linha_base_y, 38, 4.2, f"2° SALÁRIO BASE: {salario_base_2}", 6.9, "B", "L")
     cell_text(pdf, 167, linha_base_y, 28, 4.2, f"DEP. IRF: {dep_irf}", 6.9, "B", "L")
 
-    # tabelas mais altas
     tabela_y = 80.5
     tabela_h = 50.0
     tabela_gap = 2
@@ -839,9 +810,14 @@ def gerar_recibo_ferias_pdf(dados: dict) -> bytes:
     pdf.cell(147, 2.8, linha2_extenso, border=0, align="L")
 
     cell_text(pdf, 10, 150.0 + offset_pos_tabelas, 70, 3.5, "a ser paga adiantadamente", 7, "", "L")
-    texto_data_aviso = data_aviso
-    if cidade_aviso:
-        texto_data_aviso = f"{cidade_aviso.upper()}, {data_aviso}"
+
+    texto_data_aviso = ""
+    if cidade_aviso and data_aviso:
+        texto_data_aviso = f"{cidade_aviso}, {data_aviso}"
+    elif data_aviso:
+        texto_data_aviso = data_aviso
+    elif cidade_aviso:
+        texto_data_aviso = cidade_aviso
 
     cell_text(pdf, 10, 153.7 + offset_pos_tabelas, 190, 3.5, texto_data_aviso, 7.2, "", "C")
 
@@ -859,14 +835,10 @@ def gerar_recibo_ferias_pdf(dados: dict) -> bytes:
     cell_text(pdf, 10, rec_y + 6.2, 190, 4, "DE ACORDO COM O PARÁGRAFO ÚNICO DO ARTIGO 145 DA C.L.T.", 9, "B", "C")
     hline(pdf, 10, rec_y + 10.5, 200)
 
-    texto_recibo_base = as_str(recibo.get("texto") or cab.get("recibo_txt"))
-    texto_recibo_base = texto_recibo_base.strip()
+    texto_recibo_base = as_str(recibo.get("texto") or cab.get("recibo_txt")).strip()
 
     if texto_recibo_base:
-        if not texto_recibo_base.endswith("R$:") and not texto_recibo_base.endswith("R$"):
-            texto_recibo_1 = f"{texto_recibo_base} {fmt_money(valor_liquido)}"
-        else:
-            texto_recibo_1 = f"{texto_recibo_base} {fmt_money(valor_liquido)}"
+        texto_recibo_1 = f"{texto_recibo_base} {fmt_money(valor_liquido)}"
     else:
         if endereco_empresa:
             texto_recibo_1 = (
@@ -904,9 +876,14 @@ def gerar_recibo_ferias_pdf(dados: dict) -> bytes:
         "Para clareza e documento, firmo o presente recibo, dando a empresa plena e legal quitação."
     )
     multi_text(pdf, 10, rec_y + 29.8, 190, 3.5, texto_recibo_2, 6.7, "", "L")
-    texto_data_recibo = data_recibo
-    if cidade_recibo:
-        texto_data_recibo = f"{cidade_recibo.upper()}, {data_recibo}"
+
+    texto_data_recibo = ""
+    if cidade_recibo and data_recibo:
+        texto_data_recibo = f"{cidade_recibo}, {data_recibo}"
+    elif data_recibo:
+        texto_data_recibo = data_recibo
+    elif cidade_recibo:
+        texto_data_recibo = cidade_recibo
 
     cell_text(pdf, 10, rec_y + 46.5, 190, 3.5, texto_data_recibo, 7.2, "", "C")
 
@@ -978,6 +955,11 @@ def montar_payload_ferias(cabecalho_row: dict, detalhe_rows: list[dict]) -> dict
     valor_liquido = total_vencimentos - total_descontos
 
     recibo_txt = _as_str(cabecalho_row.get("recibo_txt"))
+    cidade = _as_str(cabecalho_row.get("cidade"))
+    cidade_exibicao = cidade.upper() if cidade else ""
+
+    data_aviso_fmt = _fmt_date_extenso_br(cabecalho_row.get("dataaviso"))
+    data_pagto_fmt = _fmt_date_extenso_br(cabecalho_row.get("datapagto"))
 
     dados = {
         "cabecalho": {
@@ -993,6 +975,7 @@ def montar_payload_ferias(cabecalho_row: dict, detalhe_rows: list[dict]) -> dict
             "cnpj": _as_str(cabecalho_row.get("cnpj")),
             "cod_filial": _as_str(cabecalho_row.get("cod_filial")),
             "cod_cliente": _as_str(cabecalho_row.get("cod_cliente")),
+            "codigolote": _as_str(cabecalho_row.get("codigolote")),
             "recibo_txt": recibo_txt,
         },
         "periodo": {
@@ -1022,12 +1005,12 @@ def montar_payload_ferias(cabecalho_row: dict, detalhe_rows: list[dict]) -> dict
             "valor_extenso": _valor_monetario_por_extenso(valor_liquido),
         },
         "aviso": {
-            "cidade": "",
-            "data": _fmt_date_extenso_br(cabecalho_row.get("dataretorno")),
+            "cidade": cidade_exibicao,
+            "data": data_aviso_fmt,
         },
         "recibo": {
-            "cidade": "",
-            "data": _fmt_date_extenso_br(cabecalho_row.get("dataretorno")),
+            "cidade": cidade_exibicao,
+            "data": data_pagto_fmt,
             "texto": recibo_txt,
         },
         "rodape": {
@@ -1039,8 +1022,8 @@ def montar_payload_ferias(cabecalho_row: dict, detalhe_rows: list[dict]) -> dict
             "cpf": _only_digits(cabecalho_row.get("cpf")),
             "codigo_empresa": _as_str(cabecalho_row.get("cod_empresa")),
             "endereco_empresa": "",
-            "cidade_empresa": "",
-            "cidade": "",
+            "cidade_empresa": cidade_exibicao,
+            "cidade": cidade_exibicao,
             "cnpj": _as_str(cabecalho_row.get("cnpj")),
             "cod_filial": _as_str(cabecalho_row.get("cod_filial")),
             "cod_cliente": _as_str(cabecalho_row.get("cod_cliente")),
@@ -2565,6 +2548,7 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
             c.dt_admissao,
             c.empresa,
             c.cnpj,
+            c.codigolote,
             c.cpf,
             c.recibo_txt,
             c.dataaquisini,
@@ -2581,13 +2565,17 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
             c.salprimeiroperiodo,
             c.salsegundoperiodo,
             c.dependentes,
-            c.depirf
+            c.depirf,
+            c.dataaviso,
+            c.cidade,
+            c.uf,
+            c.datapagto
         FROM public.tb_ferias_cabecalho c
         WHERE regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g') =
-              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
-          AND TRIM(c.matricula::text) = TRIM(:matricula)
-          AND TRIM(c.cod_empresa::text) = TRIM(:empresa)
-          AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
+            regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+        AND TRIM(c.matricula::text) = TRIM(:matricula)
+        AND TRIM(c.cod_empresa::text) = TRIM(:empresa)
+        AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
         LIMIT 1
     """)
 
@@ -2608,7 +2596,6 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
         )
 
     cabecalho = dict(cab_row._mapping)
-
     sql_det = text("""
         SELECT
             d.cod_empresa,
@@ -2683,6 +2670,7 @@ def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_d
             c.dt_admissao,
             c.empresa,
             c.cnpj,
+            c.codigolote,
             c.cpf,
             c.recibo_txt,
             c.dataaquisini,
@@ -2699,13 +2687,17 @@ def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_d
             c.salprimeiroperiodo,
             c.salsegundoperiodo,
             c.dependentes,
-            c.depirf
+            c.depirf,
+            c.dataaviso,
+            c.cidade,
+            c.uf,
+            c.datapagto
         FROM public.tb_ferias_cabecalho c
         WHERE regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g') =
-              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
-          AND TRIM(c.matricula::text) = TRIM(:matricula)
-          AND TRIM(c.cod_empresa::text) = TRIM(:empresa)
-          AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
+            regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+        AND TRIM(c.matricula::text) = TRIM(:matricula)
+        AND TRIM(c.cod_empresa::text) = TRIM(:empresa)
+        AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
         LIMIT 1
     """)
 
