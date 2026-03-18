@@ -52,6 +52,114 @@ class MontarInformeRendimentos(BaseModel):
     competencia: str = Field(..., min_length=1)
 
 
+class BuscarCompetenciasFerias(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    cpf: str = Field(..., min_length=1)
+    matricula: str = Field(..., min_length=1)
+    empresa: str = Field(..., min_length=1)
+
+
+class BuscarFerias(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    cpf: str = Field(..., min_length=1)
+    matricula: str = Field(..., min_length=1)
+    competencia: str = Field(..., min_length=1)
+    empresa: str = Field(..., min_length=1)
+
+
+class MontarFerias(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    cpf: str = Field(..., min_length=1)
+    matricula: str = Field(..., min_length=1)
+    competencia: str = Field(..., min_length=1)
+    empresa: str = Field(..., min_length=1)
+
+
+def _numero_ate_999(n: int) -> str:
+    unidades = [
+        "", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove"
+    ]
+    especiais = [
+        "dez", "onze", "doze", "treze", "quatorze", "quinze",
+        "dezesseis", "dezessete", "dezoito", "dezenove"
+    ]
+    dezenas = [
+        "", "", "vinte", "trinta", "quarenta", "cinquenta",
+        "sessenta", "setenta", "oitenta", "noventa"
+    ]
+    centenas = [
+        "", "cento", "duzentos", "trezentos", "quatrocentos",
+        "quinhentos", "seiscentos", "setecentos", "oitocentos", "novecentos"
+    ]
+
+    if n == 0:
+        return ""
+    if n == 100:
+        return "cem"
+    if n < 10:
+        return unidades[n]
+    if n < 20:
+        return especiais[n - 10]
+    if n < 100:
+        d, u = divmod(n, 10)
+        return dezenas[d] if u == 0 else f"{dezenas[d]} e {unidades[u]}"
+
+    c, r = divmod(n, 100)
+    if r == 0:
+        return centenas[c]
+    return f"{centenas[c]} e {_numero_ate_999(r)}"
+
+
+def _numero_por_extenso_br(n: int) -> str:
+    if n == 0:
+        return "zero"
+
+    if n < 1000:
+        return _numero_ate_999(n)
+
+    milhares, resto = divmod(n, 1000)
+
+    if milhares == 1:
+        prefixo = "mil"
+    else:
+        prefixo = f"{_numero_ate_999(milhares)} mil"
+
+    if resto == 0:
+        return prefixo
+
+    if resto < 100:
+        return f"{prefixo} e {_numero_ate_999(resto)}"
+
+    return f"{prefixo}, {_numero_ate_999(resto)}"
+
+
+def _valor_monetario_por_extenso(v: Any) -> str:
+    valor = _as_decimal(v)
+
+    inteiro = int(valor)
+    centavos = int((valor - Decimal(inteiro)) * 100)
+
+    parte_reais = _numero_por_extenso_br(inteiro)
+    parte_centavos = _numero_por_extenso_br(centavos)
+
+    if inteiro == 1:
+        reais_txt = "real"
+    else:
+        reais_txt = "reais"
+
+    if centavos == 1:
+        centavos_txt = "centavo"
+    else:
+        centavos_txt = "centavos"
+
+    if centavos == 0:
+        return f"{parte_reais} {reais_txt}".upper()
+
+    if inteiro == 0:
+        return f"{parte_centavos} {centavos_txt}".upper()
+
+    return f"{parte_reais} {reais_txt} e {parte_centavos} {centavos_txt}".upper()
+
 def _only_yyyymm(s: str) -> str:
     return re.sub(r"\D", "", (s or ""))[:6]
 
@@ -101,13 +209,17 @@ def _as_str(v: Any) -> str:
     return str(v).strip()
 
 
+def _only_digits(v: Any) -> str:
+    return "".join(ch for ch in _as_str(v) if ch.isdigit())
+
+
 def _as_decimal(v: Any) -> Decimal:
     if v is None or v == "":
         return Decimal("0")
     try:
         if isinstance(v, Decimal):
             return v
-        return Decimal(str(v))
+        return Decimal(str(v).replace(",", "."))
     except (InvalidOperation, ValueError, TypeError):
         return Decimal("0")
 
@@ -145,7 +257,7 @@ def _fmt_date_br(v: Any) -> str:
 
     s = s.split(" ")[0]
 
-    for fmt_in in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+    for fmt_in in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
         try:
             return datetime.strptime(s, fmt_in).strftime("%d/%m/%Y")
         except ValueError:
@@ -153,6 +265,789 @@ def _fmt_date_br(v: Any) -> str:
 
     return s
 
+
+def _fmt_competencia_mm_yyyy(valor: Any) -> str:
+    comp = _only_yyyymm(_as_str(valor))
+    if len(comp) == 6:
+        return f"{comp[4:6]}/{comp[:4]}"
+    return _as_str(valor)
+
+
+def _split_periodo(valor: Any) -> tuple[str, str]:
+    s = _as_str(valor)
+    if not s:
+        return "", ""
+
+    s = re.sub(r"\s+", " ", s).strip()
+
+    padroes = [
+        r"^(.*?)\s+a\s+(.*?)$",
+        r"^(.*?)\s+à\s+(.*?)$",
+        r"^(.*?)\s+ate\s+(.*?)$",
+        r"^(.*?)\s+até\s+(.*?)$",
+        r"^(.*?)\s*-\s*(.*?)$",
+    ]
+
+    for padrao in padroes:
+        m = re.match(padrao, s, flags=re.IGNORECASE)
+        if m:
+            return _fmt_date_extenso_br(m.group(1)), _fmt_date_extenso_br(m.group(2))
+
+    return _fmt_date_extenso_br(s), ""
+
+def _parse_date_any(v: Any) -> Optional[datetime]:
+    s = _as_str(v)
+    if not s:
+        return None
+
+    s = s.split(" ")[0].strip()
+
+    formatos = (
+        "%Y-%m-%d",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%Y/%m/%d",
+        "%Y%m%d",
+    )
+
+    for fmt in formatos:
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            pass
+
+    return None
+
+
+def _fmt_date_extenso_br(v: Any) -> str:
+    dt = _parse_date_any(v)
+    if not dt:
+        return _as_str(v)
+
+    meses = {
+        1: "janeiro",
+        2: "fevereiro",
+        3: "março",
+        4: "abril",
+        5: "maio",
+        6: "junho",
+        7: "julho",
+        8: "agosto",
+        9: "setembro",
+        10: "outubro",
+        11: "novembro",
+        12: "dezembro",
+    }
+
+    return f"{dt.day:02d} de {meses[dt.month]} de {dt.year}"
+
+def _fmt_date_curta_br(v: Any) -> str:
+    dt = _parse_date_any(v)
+    if not dt:
+        return _as_str(v)
+    return dt.strftime("%d/%m/%Y")
+
+def _tipo_evento_ferias(tipo: Any) -> str:
+    t = _as_str(tipo).upper()
+
+    if t in {"D", "DESC", "DESCONTO", "DESCONTOS"}:
+        return "D"
+
+    if t in {"P", "PROVENTO", "PROVENTOS", "V", "VENTO", "VENCIMENTO", "VENCIMENTOS"}:
+        return "P"
+
+    return "P"
+
+
+def _empresa_match_sql(alias: str = "c") -> str:
+    return f"""
+        (
+            TRIM(COALESCE({alias}.cod_empresa::text, '')) = TRIM(:empresa)
+            OR TRIM(COALESCE({alias}.codigo::text, '')) = TRIM(:empresa)
+            OR TRIM(COALESCE({alias}.numero::text, '')) = TRIM(:empresa)
+            OR TRIM(COALESCE({alias}.cliente::text, '')) = TRIM(:empresa)
+            OR UPPER(TRIM(COALESCE({alias}.empresa::text, ''))) = UPPER(TRIM(:empresa))
+        )
+    """
+
+
+def gerar_recibo_ferias_pdf(dados: dict) -> bytes:
+    def as_str(v: Any) -> str:
+        if v is None:
+            return ""
+        return str(v).strip()
+
+    def as_decimal(v: Any) -> Decimal:
+        if v is None or v == "":
+            return Decimal("0")
+        try:
+            if isinstance(v, Decimal):
+                return v
+            return Decimal(str(v).replace(",", "."))
+        except (InvalidOperation, ValueError, TypeError):
+            return Decimal("0")
+
+    def fmt_money(v: Any) -> str:
+        d = as_decimal(v)
+        s = f"{d:,.2f}"
+        return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+    def only_digits(v: Any) -> str:
+        return "".join(ch for ch in as_str(v) if ch.isdigit())
+
+    def fmt_cpf(v: Any) -> str:
+        s = only_digits(v)
+        if len(s) == 11:
+            return f"{s[:3]}.{s[3:6]}.{s[6:9]}-{s[9:]}"
+        return as_str(v)
+
+    def fmt_date_br(v: Any) -> str:
+        s = as_str(v)
+        if not s:
+            return ""
+        s = s.split(" ")[0]
+        formatos = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d")
+        for fmt in formatos:
+            try:
+                return datetime.strptime(s, fmt).strftime("%d/%m/%Y")
+            except ValueError:
+                pass
+        return s
+
+    def fmt_date_extenso(v: Any) -> str:
+        s = as_str(v)
+        if not s:
+            return ""
+        s = s.split(" ")[0]
+        formatos = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d")
+        for fmt in formatos:
+            try:
+                return datetime.strptime(s, fmt).strftime("%d de %B de %Y").replace(
+                    "January", "janeiro"
+                ).replace(
+                    "February", "fevereiro"
+                ).replace(
+                    "March", "março"
+                ).replace(
+                    "April", "abril"
+                ).replace(
+                    "May", "maio"
+                ).replace(
+                    "June", "junho"
+                ).replace(
+                    "July", "julho"
+                ).replace(
+                    "August", "agosto"
+                ).replace(
+                    "September", "setembro"
+                ).replace(
+                    "October", "outubro"
+                ).replace(
+                    "November", "novembro"
+                ).replace(
+                    "December", "dezembro"
+                )
+            except ValueError:
+                pass
+        return s
+
+    def truncate_local(text: Any, max_len: int) -> str:
+        s = as_str(text)
+        return s if len(s) <= max_len else s[: max_len - 3] + "..."
+
+    def money_extenso_placeholder(valor_liquido: Any, valor_extenso: Any) -> str:
+        if as_str(valor_extenso):
+            return as_str(valor_extenso).upper()
+        return _valor_monetario_por_extenso(valor_liquido)
+
+    def draw_box(pdf: FPDF, x: float, y: float, w: float, h: float, line_width: float = 0.2):
+        pdf.set_line_width(line_width)
+        pdf.rect(x, y, w, h)
+
+    def hline(pdf: FPDF, x1: float, y: float, x2: float, line_width: float = 0.2):
+        pdf.set_line_width(line_width)
+        pdf.line(x1, y, x2, y)
+
+    def preencher_com_asteriscos_duas_linhas(
+        texto: str,
+        total_linha_1: int = 86,
+        total_linha_2: int = 86,
+    ) -> tuple[str, str]:
+        texto = as_str(texto).upper().strip()
+
+        if not texto:
+            return "*" * total_linha_1, "*" * total_linha_2
+
+        linha_1 = texto
+        if len(linha_1) < total_linha_1:
+            linha_1 += "*" * (total_linha_1 - len(linha_1))
+
+        linha_2 = "*" * total_linha_2
+
+        return linha_1, linha_2
+
+    def cell_text(
+        pdf: FPDF,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        font_size: float = 8,
+        style: str = "",
+        align: str = "L",
+        border: int = 0,
+    ):
+        pdf.set_xy(x, y)
+        pdf.set_font("Arial", style, font_size)
+        pdf.cell(w, h, text, border=border, align=align)
+
+    def multi_text(
+        pdf: FPDF,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        font_size: float = 8,
+        style: str = "",
+        align: str = "L",
+        border: int = 0,
+    ):
+        pdf.set_xy(x, y)
+        pdf.set_font("Arial", style, font_size)
+        pdf.multi_cell(w, h, text, border=border, align=align)
+
+    def linha_periodo(
+        pdf: FPDF,
+        y: float,
+        rotulo: str,
+        data_inicio: str = "",
+        data_fim: str = "",
+        quantidade: str = "",
+    ):
+        x_rotulo = 12
+        x_inicio = 67
+        x_a = 137
+        x_fim = 143
+        x_qtd = 177
+
+        cell_text(pdf, x_rotulo, y, 52, 4, rotulo, 6.7, "B", "L")
+        cell_text(pdf, x_inicio, y, 66, 4, data_inicio, 6.2, "", "L")
+
+        if data_fim:
+            cell_text(pdf, x_a, y, 4, 4, "À", 6.7, "B", "C")
+            cell_text(pdf, x_fim, y, 32, 4, data_fim, 6.2, "", "L")
+
+        if quantidade:
+            cell_text(pdf, x_qtd, y, 14, 4, quantidade, 6.2, "", "R")
+
+    def render_tabela_eventos(
+        pdf: FPDF,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        titulo: str,
+        eventos: list[dict],
+        total_label: str,
+        total_valor: Any,
+    ):
+        draw_box(pdf, x, y, w, h)
+
+        cell_text(pdf, x, y + 0.8, w, 4.2, titulo, 8.7, "B", "C")
+        hline(pdf, x, y + 5.5, x + w)
+
+        col_cod = 12
+        col_desc = 40
+        col_qtde = 11
+        col_mes = 15
+        col_valor = w - (col_cod + col_desc + col_qtde + col_mes)
+
+        x_cod = x
+        x_desc = x_cod + col_cod
+        x_qtde = x_desc + col_desc
+        x_mes = x_qtde + col_qtde
+        x_val = x_mes + col_mes
+
+        cell_text(pdf, x_cod + 1, y + 6.0, col_cod - 2, 3.0, "COD.", 6.2, "B", "L")
+        cell_text(pdf, x_desc + 1, y + 6.0, col_desc - 2, 3.0, "DESCRIÇÃO", 6.2, "B", "L")
+        cell_text(pdf, x_qtde + 1, y + 6.0, col_qtde - 2, 3.0, "QTDE", 6.2, "B", "R")
+        cell_text(pdf, x_mes + 1, y + 6.0, col_mes - 2, 3.0, "MÊS/ANO", 6.2, "B", "R")
+        cell_text(pdf, x_val + 1, y + 6.0, col_valor - 2, 3.0, "VALOR", 6.2, "B", "R")
+
+        row_y = y + 9.8
+        row_h = 3.45
+        area_util = h - 15.2
+        max_rows = int(area_util / row_h)
+
+        eventos_render = eventos[:max_rows]
+
+        for evt in eventos_render:
+            codigo = truncate_local(evt.get("codigo") or evt.get("evento") or evt.get("cod"), 8)
+            descricao = truncate_local(evt.get("descricao") or evt.get("evento_nome") or "", 34)
+            qtde = as_str(evt.get("qtde") or evt.get("quantidade") or evt.get("referencia") or "")
+            mes_ano = as_str(evt.get("mes_ano") or evt.get("competencia") or "")
+            valor = fmt_money(evt.get("valor") or evt.get("valor_total") or 0)
+
+            cell_text(pdf, x_cod + 1, row_y, col_cod - 2, 3.0, codigo, 6.4, "", "L")
+            cell_text(pdf, x_desc + 1, row_y, col_desc - 2, 3.0, descricao, 6.4, "", "L")
+            cell_text(pdf, x_qtde + 1, row_y, col_qtde - 2, 3.0, qtde, 6.4, "", "R")
+            cell_text(pdf, x_mes + 1, row_y, col_mes - 2, 3.0, mes_ano, 6.4, "", "R")
+            cell_text(pdf, x_val + 1, row_y, col_valor - 2, 3.0, valor, 6.4, "", "R")
+
+            row_y += row_h
+
+        total_y = y + h - 4.5
+        hline(pdf, x, total_y, x + w)
+        cell_text(pdf, x + 1, total_y + 0.4, w - 40, 3.6, total_label, 6.7, "B", "L")
+        cell_text(pdf, x + w - 38, total_y + 0.4, 37, 3.6, fmt_money(total_valor), 6.7, "B", "R")
+
+    cab = dados.get("cabecalho", {}) or {}
+    periodo = dados.get("periodo", {}) or {}
+    base_calc = dados.get("base_calculo", {}) or {}
+    totais = dados.get("totais", {}) or {}
+    aviso = dados.get("aviso", {}) or {}
+    recibo = dados.get("recibo", {}) or {}
+    rodape = dados.get("rodape", {}) or {}
+
+    vencimentos = dados.get("vencimentos", []) or []
+    descontos = dados.get("descontos", []) or []
+
+    empregado_linha = as_str(cab.get("empregado_linha"))
+    if not empregado_linha:
+        partes = [
+            "EMPREGADO:",
+            as_str(cab.get("codigo_empregado")),
+            as_str(cab.get("pis")),
+            fmt_cpf(cab.get("cpf")),
+            truncate_local(cab.get("nome"), 45),
+        ]
+        empregado_linha = " - ".join([p for p in partes if p and p != "EMPREGADO:"])
+        empregado_linha = f"EMPREGADO: {empregado_linha}"
+
+    funcao_admissao = as_str(cab.get("funcao_admissao"))
+    if not funcao_admissao:
+        funcao = truncate_local(cab.get("funcao"), 35)
+        admissao = fmt_date_br(cab.get("admissao"))
+        funcao_admissao = f"{funcao} ADMISSÃO:{admissao}".strip()
+
+    de_aquisicao = as_str(periodo.get("de_aquisicao"))
+    ate_aquisicao = as_str(periodo.get("ate_aquisicao"))
+    de_abono = as_str(periodo.get("de_abono"))
+    ate_abono = as_str(periodo.get("ate_abono"))
+    de_gozo = as_str(periodo.get("de_gozo"))
+    ate_gozo = as_str(periodo.get("ate_gozo"))
+    retorno = as_str(periodo.get("retorno"))
+
+    faltas_nao_just = as_str(base_calc.get("faltas_nao_justificadas") or "00")
+    salario_base_1 = fmt_money(base_calc.get("salario_base_1") or 0)
+    salario_base_2 = fmt_money(base_calc.get("salario_base_2") or 0)
+    dep_irf = as_str(base_calc.get("dep_irf") or "00")
+
+    total_vencimentos = totais.get("total_vencimentos") or sum(
+        (as_decimal(v.get("valor")) for v in vencimentos),
+        Decimal("0"),
+    )
+    total_descontos = totais.get("total_descontos") or sum(
+        (as_decimal(v.get("valor")) for v in descontos),
+        Decimal("0"),
+    )
+    valor_liquido = totais.get("valor_liquido") or (
+        as_decimal(total_vencimentos) - as_decimal(total_descontos)
+    )
+    valor_extenso = money_extenso_placeholder(valor_liquido, totais.get("valor_extenso"))
+
+    cidade_aviso = as_str(aviso.get("cidade") or rodape.get("cidade") or "")
+    data_aviso = as_str(aviso.get("data"))
+    cidade_recibo = as_str(recibo.get("cidade") or rodape.get("cidade") or "")
+    data_recibo = as_str(recibo.get("data"))
+
+    empresa_assinatura = truncate_local(
+        cab.get("empresa_nome") or cab.get("cliente_nome") or cab.get("empresa") or "",
+        55,
+    )
+    nome_empregado = truncate_local(cab.get("nome"), 40)
+
+    banco = as_str(rodape.get("banco"))
+    agencia = as_str(rodape.get("agencia"))
+    conta = as_str(rodape.get("conta"))
+    tipo_conta = as_str(rodape.get("tipo_conta"))
+    folha = as_str(rodape.get("folha"))
+    cpf_rodape = fmt_cpf(rodape.get("cpf") or cab.get("cpf"))
+    codigo_empresa = as_str(rodape.get("codigo_empresa") or cab.get("empresa"))
+    endereco_empresa = as_str(rodape.get("endereco_empresa"))
+    cidade_empresa = as_str(rodape.get("cidade_empresa") or rodape.get("cidade"))
+
+    pdf = FPDF(format="A4", unit="mm")
+    pdf.set_auto_page_break(auto=False)
+    pdf.add_page()
+    pdf.set_draw_color(0, 0, 0)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_line_width(0.2)
+
+    main_x = 10
+    main_y = 10
+    main_w = 190
+    main_h = 126
+    draw_box(pdf, main_x, main_y, main_w, main_h)
+
+    cell_text(pdf, 10, 11.5, 190, 6, "AVISO E RECIBO DE FÉRIAS", 14, "B", "C")
+    cell_text(pdf, 10, 17.3, 190, 5, "CAPÍTULO VI - TÍTULO II DA C.L.T.", 11, "", "C")
+    cell_text(
+        pdf,
+        10,
+        21.6,
+        190,
+        3.5,
+        "LEI N° 5452 DE 01/05/1943, COM AS ALTERAÇÕES DO DEC. - LEI N° 1.535 DE 13/04/1977",
+        6,
+        "",
+        "C",
+    )
+    cell_text(
+        pdf,
+        10,
+        25.0,
+        190,
+        3.5,
+        "AVISO PRÉVIO DE FÉRIAS - DE ACORDO COM O ART. 135 DA C.L.T., PARTICIPANDO DO MÍNIMO COM 30 DIAS DE ANTECEDÊNCIA",
+        6,
+        "",
+        "C",
+    )
+
+    hline(pdf, 10, 29.5, 200)
+    cell_text(pdf, 10, 30.0, 190, 4.5, "NOTIFICAÇÃO", 9, "B", "C")
+    hline(pdf, 10, 34.0, 200)
+
+    cell_text(pdf, 12, 35.0, 115, 4, empregado_linha, 5.8, "", "L")
+    cell_text(pdf, 129, 35.0, 68, 4, funcao_admissao, 5.8, "", "L")
+    hline(pdf, 10, 40.0, 200)
+
+    cell_text(pdf, 10, 40.3, 190, 4.5, "PERÍODO", 9, "B", "C")
+    hline(pdf, 10, 44.5, 200)
+
+    linha_periodo(pdf, 47.5, "DE AQUISIÇÃO:.............:", de_aquisicao, ate_aquisicao)
+    linha_periodo(
+        pdf,
+        52.0,
+        "DE 1/3 ABONO PECUNIÁRIO...:",
+        de_abono,
+        ate_abono,
+        f"({as_str(periodo.get('dias_abono') or '')})",
+    )
+    linha_periodo(
+        pdf,
+        56.5,
+        "DE GOZO DAS FÉRIAS........:",
+        de_gozo,
+        ate_gozo,
+        f"({as_str(periodo.get('dias_gozo') or '')})",
+    )
+    linha_periodo(pdf, 61.0, "DE RETORNO................:", retorno)
+
+    hline(pdf, 10, 66.8, 200)
+
+    cell_text(
+        pdf,
+        10,
+        67.2,
+        190,
+        4.2,
+        "BASE DE CÁLCULO DA REMUNERAÇÃO DAS FÉRIAS",
+        8.6,
+        "B",
+        "C",
+    )
+
+    hline(pdf, 10, 71.5, 200)
+
+    linha_base_y = 73.5
+
+    cell_text(pdf, 12, linha_base_y, 42, 4.2, f"FALTAS NÃO JUSTIFICADAS: {faltas_nao_just}", 6.9, "B", "L")
+    cell_text(pdf, 61, linha_base_y, 44, 4.2, f"1° SALÁRIO BASE: {salario_base_1}", 6.9, "B", "L")
+    cell_text(pdf, 114, linha_base_y, 38, 4.2, f"2° SALÁRIO BASE: {salario_base_2}", 6.9, "B", "L")
+    cell_text(pdf, 167, linha_base_y, 28, 4.2, f"DEP. IRF: {dep_irf}", 6.9, "B", "L")
+
+    # tabelas mais altas
+    tabela_y = 80.5
+    tabela_h = 50.0
+    tabela_gap = 2
+    tabela_w = (190 - tabela_gap) / 2
+
+    render_tabela_eventos(
+        pdf=pdf,
+        x=10,
+        y=tabela_y,
+        w=tabela_w,
+        h=tabela_h,
+        titulo="VENCIMENTOS",
+        eventos=vencimentos,
+        total_label="TOTAL DE VENCIMENTO ----> R$",
+        total_valor=total_vencimentos,
+    )
+
+    render_tabela_eventos(
+        pdf=pdf,
+        x=10 + tabela_w + tabela_gap,
+        y=tabela_y,
+        w=tabela_w,
+        h=tabela_h,
+        titulo="DESCONTOS",
+        eventos=descontos,
+        total_label="TOTAL DE DESCONTOS ----> R$",
+        total_valor=total_descontos,
+    )
+
+    offset_pos_tabelas = 6.0
+
+    cell_text(
+        pdf,
+        10,
+        125.2 + offset_pos_tabelas,
+        190,
+        4.5,
+        f"VALOR TOTAL LÍQUIDO ----> R$ {fmt_money(valor_liquido)}",
+        9,
+        "B",
+        "C",
+    )
+    hline(pdf, 10, 129.4 + offset_pos_tabelas, 200)
+
+    texto_aviso = (
+        f"Pelo presente comunicamos-lhes que, de acordo com a lei, ser-lhe-ão concedidas férias relativas ao período "
+        f"acima descrito e a sua disposição fica a importância líquida de R$ {fmt_money(valor_liquido)}"
+    )
+    multi_text(pdf, 16, 130.6 + offset_pos_tabelas, 178, 3.8, texto_aviso, 6.8, "", "C")
+
+    draw_box(pdf, 18, 140.2 + offset_pos_tabelas, 174, 8.5)
+    cell_text(pdf, 20, 141.4 + offset_pos_tabelas, 18, 3.5, "VALOR POR", 7.2, "B", "L")
+    cell_text(pdf, 20, 144.8 + offset_pos_tabelas, 18, 3.5, "EXTENSO", 7.2, "B", "L")
+
+    linha1_extenso, linha2_extenso = preencher_com_asteriscos_duas_linhas(
+        valor_extenso,
+        total_linha_1=86,
+        total_linha_2=86,
+    )
+
+    pdf.set_font("Arial", "", 7.0)
+    pdf.set_xy(40, 142.2 + offset_pos_tabelas)
+    pdf.cell(147, 2.8, linha1_extenso, border=0, align="L")
+
+    pdf.set_xy(40, 145.6 + offset_pos_tabelas)
+    pdf.cell(147, 2.8, linha2_extenso, border=0, align="L")
+
+    cell_text(pdf, 10, 150.0 + offset_pos_tabelas, 70, 3.5, "a ser paga adiantadamente", 7, "", "L")
+    texto_data_aviso = data_aviso
+    if cidade_aviso:
+        texto_data_aviso = f"{cidade_aviso.upper()}, {data_aviso}"
+
+    cell_text(pdf, 10, 153.7 + offset_pos_tabelas, 190, 3.5, texto_data_aviso, 7.2, "", "C")
+
+    y_ass_top = 164.8 + offset_pos_tabelas
+    hline(pdf, 20, y_ass_top, 100, 0.2)
+    hline(pdf, 108, y_ass_top, 190, 0.2)
+    cell_text(pdf, 20, y_ass_top + 0.8, 80, 3.5, nome_empregado.upper(), 6.8, "B", "L")
+    cell_text(pdf, 108, y_ass_top + 0.8, 82, 3.5, empresa_assinatura.upper(), 6.8, "B", "L")
+
+    rec_y = 173.0 + offset_pos_tabelas
+    rec_h = 67.0
+    draw_box(pdf, 10, rec_y, 190, rec_h)
+
+    cell_text(pdf, 10, rec_y + 1.0, 190, 5.5, "RECIBO DE FÉRIAS", 14, "B", "C")
+    cell_text(pdf, 10, rec_y + 6.2, 190, 4, "DE ACORDO COM O PARÁGRAFO ÚNICO DO ARTIGO 145 DA C.L.T.", 9, "B", "C")
+    hline(pdf, 10, rec_y + 10.5, 200)
+
+    texto_recibo_base = as_str(recibo.get("texto") or cab.get("recibo_txt"))
+    texto_recibo_base = texto_recibo_base.strip()
+
+    if texto_recibo_base:
+        if not texto_recibo_base.endswith("R$:") and not texto_recibo_base.endswith("R$"):
+            texto_recibo_1 = f"{texto_recibo_base} {fmt_money(valor_liquido)}"
+        else:
+            texto_recibo_1 = f"{texto_recibo_base} {fmt_money(valor_liquido)}"
+    else:
+        if endereco_empresa:
+            texto_recibo_1 = (
+                f"Recebi da empresa {empresa_assinatura.upper()}, estabelecida a {endereco_empresa}, "
+                f"a importância de R$: {fmt_money(valor_liquido)}"
+            )
+        else:
+            texto_recibo_1 = (
+                f"Recebi da empresa {empresa_assinatura.upper()}, "
+                f"a importância de R$: {fmt_money(valor_liquido)}"
+            )
+
+    multi_text(pdf, 18, rec_y + 11.5, 174, 3.7, texto_recibo_1, 6.8, "", "C")
+
+    draw_box(pdf, 18, rec_y + 20.0, 174, 8.5)
+    cell_text(pdf, 20, rec_y + 21.2, 18, 3.5, "VALOR POR", 7.2, "B", "L")
+    cell_text(pdf, 20, rec_y + 24.6, 18, 3.5, "EXTENSO", 7.2, "B", "L")
+
+    linha1_extenso_rec, linha2_extenso_rec = preencher_com_asteriscos_duas_linhas(
+        valor_extenso,
+        total_linha_1=86,
+        total_linha_2=86,
+    )
+
+    pdf.set_font("Arial", "", 7.0)
+    pdf.set_xy(40, rec_y + 22.0)
+    pdf.cell(147, 2.8, linha1_extenso_rec, border=0, align="L")
+
+    pdf.set_xy(40, rec_y + 25.4)
+    pdf.cell(147, 2.8, linha2_extenso_rec, border=0, align="L")
+
+    texto_recibo_2 = (
+        'que me é paga antecipadamente por motivo das minhas férias regulares, ora concedidas e que vou gozar de acordo '
+        'com a descrição acima, tudo conforme o aviso que recebi em tempo, no qual dei o meu "CIENTE".\n'
+        "Para clareza e documento, firmo o presente recibo, dando a empresa plena e legal quitação."
+    )
+    multi_text(pdf, 10, rec_y + 29.8, 190, 3.5, texto_recibo_2, 6.7, "", "L")
+    texto_data_recibo = data_recibo
+    if cidade_recibo:
+        texto_data_recibo = f"{cidade_recibo.upper()}, {data_recibo}"
+
+    cell_text(pdf, 10, rec_y + 46.5, 190, 3.5, texto_data_recibo, 7.2, "", "C")
+
+    hline(pdf, 112, rec_y + 58.5, 190, 0.2)
+    cell_text(pdf, 112, rec_y + 59.0, 70, 3.5, nome_empregado.upper(), 6.8, "B", "L")
+
+    hline(pdf, 10, 240.8, 200)
+    cell_text(pdf, 10, 241.8, 190, 3.5, "Boas Férias!", 6.8, "", "L")
+
+    rod_y = 249.0
+
+    linha_banco_partes = []
+    if banco:
+        linha_banco_partes.append(f"Banco:{banco}")
+    if agencia:
+        linha_banco_partes.append(f"Agencia:{agencia}")
+    if conta:
+        linha_banco_partes.append(f"Conta:{conta}")
+    if tipo_conta:
+        linha_banco_partes.append(f"Tipo:{tipo_conta}")
+    if folha:
+        linha_banco_partes.append(f"(Folha:{folha})")
+
+    linha_banco = "   ".join(linha_banco_partes)
+
+    if linha_banco:
+        cell_text(pdf, 10, rod_y, 190, 3.3, linha_banco, 6.5, "", "L")
+
+    linha_empresa = f"{codigo_empresa} - {empresa_assinatura.upper()}".strip(" -")
+    cell_text(pdf, 10, rod_y + 4, 190, 3.3, linha_empresa, 6.5, "", "L")
+
+    if cpf_rodape:
+        cell_text(pdf, 10, rod_y + 8, 190, 3.3, f"CPF: {cpf_rodape}", 6.5, "", "L")
+
+    if cidade_empresa:
+        cell_text(pdf, 10, rod_y + 12, 190, 3.3, cidade_empresa.upper(), 6.5, "", "L")
+
+    return pdf.output(dest="S").encode("latin-1")
+
+def montar_payload_ferias(cabecalho_row: dict, detalhe_rows: list[dict]) -> dict:
+    vencimentos = []
+    descontos = []
+
+    for det in detalhe_rows:
+        evento = {
+            "codigo": _as_str(det.get("codigoevento")),
+            "descricao": _as_str(det.get("descricao")),
+            "qtde": _as_str(det.get("qtde")),
+            "mes_ano": _fmt_competencia_mm_yyyy(det.get("competencia")),
+            "valor": det.get("valor") or 0,
+            "tipo": _as_str(det.get("tipo")).upper(),
+        }
+
+        tipo_evt = _tipo_evento_ferias(det.get("tipo"))
+
+        if tipo_evt == "D":
+            descontos.append(evento)
+        else:
+            vencimentos.append(evento)
+
+    total_vencimentos = sum(
+        (_as_decimal(v.get("valor")) for v in vencimentos),
+        Decimal("0"),
+    )
+    total_descontos = sum(
+        (_as_decimal(v.get("valor")) for v in descontos),
+        Decimal("0"),
+    )
+    valor_liquido = total_vencimentos - total_descontos
+
+    recibo_txt = _as_str(cabecalho_row.get("recibo_txt"))
+
+    dados = {
+        "cabecalho": {
+            "codigo_empregado": _as_str(cabecalho_row.get("matricula")),
+            "pis": "",
+            "cpf": _only_digits(cabecalho_row.get("cpf")),
+            "nome": _as_str(cabecalho_row.get("nome")),
+            "funcao": _as_str(cabecalho_row.get("cargo")),
+            "admissao": _fmt_date_curta_br(cabecalho_row.get("dt_admissao")),
+            "empresa": _as_str(cabecalho_row.get("cod_empresa")),
+            "empresa_nome": _as_str(cabecalho_row.get("empresa")),
+            "cliente_nome": _as_str(cabecalho_row.get("cod_cliente")),
+            "cnpj": _as_str(cabecalho_row.get("cnpj")),
+            "cod_filial": _as_str(cabecalho_row.get("cod_filial")),
+            "cod_cliente": _as_str(cabecalho_row.get("cod_cliente")),
+            "recibo_txt": recibo_txt,
+        },
+        "periodo": {
+            "de_aquisicao": _fmt_date_extenso_br(cabecalho_row.get("dataaquisini")),
+            "ate_aquisicao": _fmt_date_extenso_br(cabecalho_row.get("dataaquisfin")),
+            "de_abono": _fmt_date_extenso_br(cabecalho_row.get("dataabonoini")),
+            "ate_abono": _fmt_date_extenso_br(cabecalho_row.get("dataabonofin")),
+            "dias_abono": _as_str(cabecalho_row.get("diasabono")),
+            "de_gozo": _fmt_date_extenso_br(cabecalho_row.get("datagozoini")),
+            "ate_gozo": _fmt_date_extenso_br(cabecalho_row.get("datagozofin")),
+            "dias_gozo": _as_str(cabecalho_row.get("duracao")),
+            "retorno": _fmt_date_extenso_br(cabecalho_row.get("dataretorno")),
+        },
+        "base_calculo": {
+            "faltas_nao_justificadas": _as_str(cabecalho_row.get("qtdfaltas")),
+            "salario_base_1": cabecalho_row.get("salprimeiroperiodo"),
+            "salario_base_2": cabecalho_row.get("salsegundoperiodo"),
+            "dep_irf": _as_str(cabecalho_row.get("depirf")),
+            "dependentes": _as_str(cabecalho_row.get("dependentes")),
+        },
+        "vencimentos": vencimentos,
+        "descontos": descontos,
+        "totais": {
+            "total_vencimentos": total_vencimentos,
+            "total_descontos": total_descontos,
+            "valor_liquido": valor_liquido,
+            "valor_extenso": _valor_monetario_por_extenso(valor_liquido),
+        },
+        "aviso": {
+            "cidade": "",
+            "data": _fmt_date_extenso_br(cabecalho_row.get("dataretorno")),
+        },
+        "recibo": {
+            "cidade": "",
+            "data": _fmt_date_extenso_br(cabecalho_row.get("dataretorno")),
+            "texto": recibo_txt,
+        },
+        "rodape": {
+            "banco": "",
+            "agencia": "",
+            "conta": "",
+            "tipo_conta": "",
+            "folha": "",
+            "cpf": _only_digits(cabecalho_row.get("cpf")),
+            "codigo_empresa": _as_str(cabecalho_row.get("cod_empresa")),
+            "endereco_empresa": "",
+            "cidade_empresa": "",
+            "cidade": "",
+            "cnpj": _as_str(cabecalho_row.get("cnpj")),
+            "cod_filial": _as_str(cabecalho_row.get("cod_filial")),
+            "cod_cliente": _as_str(cabecalho_row.get("cod_cliente")),
+        },
+    }
+
+    return dados
 
 def gerar_informe_rendimentos_pdf(
     registros: list[dict],
@@ -199,7 +1094,6 @@ def gerar_informe_rendimentos_pdf(
         pdf.set_draw_color(0, 0, 0)
         pdf.set_line_width(0.2)
 
-        codigo_empresa = _as_str(registro.get("codigo_empresa"))
         cpf_cnpj_cliente = _as_str(registro.get("cpf_cnpj_cliente"))
         nome_cliente = truncate(_as_str(registro.get("nome_cliente")), 90)
         matricula = _as_str(registro.get("matricula"))
@@ -1582,5 +2476,299 @@ def montar_beneficio(payload: dict = Body(...), db: Session = Depends(get_db)):
         "lote": lote,
         "total_geral": float(total_geral),
         "beneficios": beneficios,
+        "pdf_base64": pdf_base64,
+    }
+
+
+@router.post("/documents/ferias/competencias")
+async def listar_competencias_ferias(
+    request: Request,
+    cpf: Optional[str] = Query(None),
+    matricula: Optional[str] = Query(None),
+    empresa: Optional[str] = Query(None),
+    cliente: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    empresa = empresa or cliente
+
+    if not matricula or not empresa:
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                matricula = matricula or body.get("matricula")
+                empresa = empresa or body.get("empresa") or body.get("cliente")
+        except Exception:
+            pass
+
+    if not matricula or not empresa:
+        raise HTTPException(
+            status_code=422,
+            detail="Informe 'matricula' e 'empresa' (na querystring ou no body JSON).",
+        )
+
+    params = {
+        "matricula": _as_str(matricula),
+        "empresa": _as_str(empresa),
+    }
+
+    sql = text("""
+        SELECT DISTINCT
+            regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') AS comp
+        FROM public.tb_ferias_cabecalho c
+        WHERE TRIM(c.matricula::text) = TRIM(:matricula)
+          AND TRIM(c.cod_empresa::text) = TRIM(:empresa)
+          AND c.cpt1per IS NOT NULL
+          AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') ~ '^[0-9]{6}$'
+        ORDER BY comp DESC
+    """)
+
+    rows = db.execute(sql, params).fetchall()
+
+    competencias = [
+        {"ano": int(r[0][:4]), "mes": int(r[0][4:6])}
+        for r in rows
+        if r[0] and len(r[0]) == 6
+    ]
+
+    if not competencias:
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhuma competência de férias encontrada para os parâmetros informados.",
+        )
+
+    return {"competencias": competencias}
+
+
+@router.post("/documents/ferias/buscar")
+def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_db)):
+    cpf = _only_digits(payload.cpf)
+    matricula = _as_str(payload.matricula)
+    competencia = _as_str(payload.competencia)
+    empresa = _as_str(payload.empresa)
+
+    if not cpf or not matricula or not competencia or not empresa:
+        raise HTTPException(
+            status_code=422,
+            detail="Informe cpf, matricula, competencia e empresa.",
+        )
+
+    comp_norm = _only_yyyymm(_normaliza_anomes(competencia) or competencia)
+
+    sql_cab = text("""
+        SELECT
+            c.cod_empresa,
+            c.cod_filial,
+            c.matricula,
+            c.cod_cliente,
+            c.nome,
+            c.cargo,
+            c.dt_admissao,
+            c.empresa,
+            c.cnpj,
+            c.cpf,
+            c.recibo_txt,
+            c.dataaquisini,
+            c.dataaquisfin,
+            c.dataabonoini,
+            c.dataabonofin,
+            c.diasabono,
+            c.datagozoini,
+            c.datagozofin,
+            c.duracao,
+            c.cpt1per,
+            c.dataretorno,
+            c.qtdfaltas,
+            c.salprimeiroperiodo,
+            c.salsegundoperiodo,
+            c.dependentes,
+            c.depirf
+        FROM public.tb_ferias_cabecalho c
+        WHERE regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g') =
+              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+          AND TRIM(c.matricula::text) = TRIM(:matricula)
+          AND TRIM(c.cod_empresa::text) = TRIM(:empresa)
+          AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
+        LIMIT 1
+    """)
+
+    cab_row = db.execute(
+        sql_cab,
+        {
+            "cpf": cpf,
+            "matricula": matricula,
+            "empresa": empresa,
+            "competencia": comp_norm,
+        },
+    ).first()
+
+    if not cab_row:
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhum recibo de férias encontrado para os critérios informados.",
+        )
+
+    cabecalho = dict(cab_row._mapping)
+
+    sql_det = text("""
+        SELECT
+            d.cod_empresa,
+            d.cod_filial,
+            d.matricula,
+            d.codigoevento,
+            d.descricao,
+            d.qtde,
+            d.competencia,
+            d.valor,
+            d.tipo
+        FROM public.tb_ferias_detalhe d
+        WHERE TRIM(d.matricula::text) = TRIM(:matricula)
+          AND TRIM(d.cod_empresa::text) = TRIM(:empresa)
+          AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
+        ORDER BY d.tipo, d.codigoevento
+    """)
+
+    det_rows = db.execute(
+        sql_det,
+        {
+            "matricula": matricula,
+            "empresa": empresa,
+            "competencia": comp_norm,
+        },
+    ).fetchall()
+
+    detalhes = [dict(r._mapping) for r in det_rows]
+
+    payload_pdf = montar_payload_ferias(cabecalho, detalhes)
+
+    return {
+        "tipo": "ferias",
+        "cpf": cpf,
+        "matricula": matricula,
+        "competencia": comp_norm,
+        "empresa": empresa,
+        "total": 1,
+        "ferias": [
+            {
+                "cabecalho": cabecalho,
+                "detalhes": detalhes,
+                "dados_pdf": payload_pdf,
+            }
+        ],
+    }
+
+
+@router.post("/documents/ferias/montar")
+def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_db)):
+    cpf = _only_digits(payload.cpf)
+    matricula = _as_str(payload.matricula)
+    competencia = _as_str(payload.competencia)
+    empresa = _as_str(payload.empresa)
+
+    if not cpf or not matricula or not competencia or not empresa:
+        raise HTTPException(
+            status_code=422,
+            detail="Informe cpf, matricula, competencia e empresa.",
+        )
+
+    comp_norm = _only_yyyymm(_normaliza_anomes(competencia) or competencia)
+
+    sql_cab = text("""
+        SELECT
+            c.cod_empresa,
+            c.cod_filial,
+            c.matricula,
+            c.cod_cliente,
+            c.nome,
+            c.cargo,
+            c.dt_admissao,
+            c.empresa,
+            c.cnpj,
+            c.cpf,
+            c.recibo_txt,
+            c.dataaquisini,
+            c.dataaquisfin,
+            c.dataabonoini,
+            c.dataabonofin,
+            c.diasabono,
+            c.datagozoini,
+            c.datagozofin,
+            c.duracao,
+            c.cpt1per,
+            c.dataretorno,
+            c.qtdfaltas,
+            c.salprimeiroperiodo,
+            c.salsegundoperiodo,
+            c.dependentes,
+            c.depirf
+        FROM public.tb_ferias_cabecalho c
+        WHERE regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g') =
+              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+          AND TRIM(c.matricula::text) = TRIM(:matricula)
+          AND TRIM(c.cod_empresa::text) = TRIM(:empresa)
+          AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
+        LIMIT 1
+    """)
+
+    cab_row = db.execute(
+        sql_cab,
+        {
+            "cpf": cpf,
+            "matricula": matricula,
+            "empresa": empresa,
+            "competencia": comp_norm,
+        },
+    ).first()
+
+    if not cab_row:
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhum recibo de férias encontrado para os critérios informados.",
+        )
+
+    cabecalho = dict(cab_row._mapping)
+
+    sql_det = text("""
+        SELECT
+            d.cod_empresa,
+            d.cod_filial,
+            d.matricula,
+            d.codigoevento,
+            d.descricao,
+            d.qtde,
+            d.competencia,
+            d.valor,
+            d.tipo
+        FROM public.tb_ferias_detalhe d
+        WHERE TRIM(d.matricula::text) = TRIM(:matricula)
+          AND TRIM(d.cod_empresa::text) = TRIM(:empresa)
+          AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
+        ORDER BY d.tipo, d.codigoevento
+    """)
+
+    det_rows = db.execute(
+        sql_det,
+        {
+            "matricula": matricula,
+            "empresa": empresa,
+            "competencia": comp_norm,
+        },
+    ).fetchall()
+
+    detalhes = [dict(r._mapping) for r in det_rows]
+
+    dados_pdf = montar_payload_ferias(cabecalho, detalhes)
+
+    raw_pdf = gerar_recibo_ferias_pdf(dados_pdf)
+    pdf_base64 = base64.b64encode(raw_pdf).decode("utf-8")
+
+    return {
+        "tipo": "ferias",
+        "cpf": cpf,
+        "matricula": matricula,
+        "competencia": comp_norm,
+        "empresa": empresa,
+        "cabecalho": cabecalho,
+        "detalhes": detalhes,
+        "dados_pdf": dados_pdf,
         "pdf_base64": pdf_base64,
     }
