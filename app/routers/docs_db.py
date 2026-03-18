@@ -653,6 +653,15 @@ def gerar_recibo_ferias_pdf(dados: dict) -> bytes:
     codigo_empresa = as_str(rodape.get("codigo_empresa") or cab.get("empresa"))
     endereco_empresa = as_str(rodape.get("endereco_empresa"))
     cidade_empresa = as_str(rodape.get("cidade_empresa") or rodape.get("cidade"))
+    uf_empresa = as_str(rodape.get("uf"))
+    nome_banco = as_str(rodape.get("nome_banco"))
+    cod_filial = as_str(rodape.get("cod_filial"))
+    cod_cliente = as_str(rodape.get("cod_cliente"))
+    empresa_nome_rodape = truncate_local(
+        rodape.get("empresa_nome") or cab.get("empresa_nome") or cab.get("empresa") or "",
+        70,
+    )
+    codigo_cidade = as_str(rodape.get("codigo_cidade"))
 
     pdf = FPDF(format="A4", unit="mm")
     pdf.set_auto_page_break(auto=False)
@@ -907,28 +916,58 @@ def gerar_recibo_ferias_pdf(dados: dict) -> bytes:
         linha_banco_partes.append(f"Conta:{conta}")
     if tipo_conta:
         linha_banco_partes.append(f"Tipo:{tipo_conta}")
-    if folha:
-        linha_banco_partes.append(f"(Folha:{folha})")
 
-    linha_banco = "   ".join(linha_banco_partes)
+    sufixo_folha = ""
+    if folha and nome_banco:
+        sufixo_folha = f"(Folha:{folha} {nome_banco.upper()})"
+    elif folha:
+        sufixo_folha = f"(Folha:{folha})"
+    elif nome_banco:
+        sufixo_folha = f"({nome_banco.upper()})"
+
+    linha_banco = " ".join(linha_banco_partes)
+    if sufixo_folha:
+        linha_banco = f"{linha_banco}    {sufixo_folha}".strip()
 
     if linha_banco:
         cell_text(pdf, 10, rod_y, 190, 3.3, linha_banco, 6.5, "", "L")
 
-    linha_empresa = f"{codigo_empresa} - {empresa_assinatura.upper()}".strip(" -")
+    partes_empresa = [
+        codigo_empresa.zfill(5) if codigo_empresa else "",
+        cod_filial.zfill(3) if cod_filial else "",
+        cod_cliente.zfill(2) if cod_cliente else "",
+    ]
+
+    prefixo_empresa = " - ".join([p for p in partes_empresa if p])
+    linha_empresa = f"{prefixo_empresa} - {empresa_nome_rodape.upper()}".strip(" -")
     cell_text(pdf, 10, rod_y + 4, 190, 3.3, linha_empresa, 6.5, "", "L")
 
     if cpf_rodape:
         cell_text(pdf, 10, rod_y + 8, 190, 3.3, f"CPF: {cpf_rodape}", 6.5, "", "L")
 
-    if cidade_empresa:
-        cell_text(pdf, 10, rod_y + 12, 190, 3.3, cidade_empresa.upper(), 6.5, "", "L")
+    cidade_uf = ""
+    if cidade_empresa and uf_empresa:
+        cidade_uf = f"{cidade_empresa.upper()} - {uf_empresa.upper()}"
+    elif cidade_empresa:
+        cidade_uf = cidade_empresa.upper()
+    elif uf_empresa:
+        cidade_uf = uf_empresa.upper()
+
+    linha_cidade = cidade_uf
+    if codigo_cidade and linha_cidade:
+        linha_cidade = f"{codigo_cidade} - {linha_cidade}"
+    elif codigo_cidade:
+        linha_cidade = codigo_cidade
+
+    if linha_cidade:
+        cell_text(pdf, 10, rod_y + 12, 190, 3.3, linha_cidade, 6.5, "", "L")
 
     return pdf.output(dest="S").encode("latin-1")
 
 def montar_payload_ferias(cabecalho_row: dict, detalhe_rows: list[dict]) -> dict:
     vencimentos = []
     descontos = []
+    det0 = detalhe_rows[0] if detalhe_rows else {}
 
     for det in detalhe_rows:
         evento = {
@@ -959,6 +998,7 @@ def montar_payload_ferias(cabecalho_row: dict, detalhe_rows: list[dict]) -> dict
 
     recibo_txt = _as_str(cabecalho_row.get("recibo_txt"))
     cidade = _as_str(cabecalho_row.get("cidade"))
+    uf = _as_str(cabecalho_row.get("uf"))
     cidade_exibicao = cidade.upper() if cidade else ""
 
     data_aviso_fmt = _fmt_date_extenso_br(cabecalho_row.get("dataaviso"))
@@ -1017,19 +1057,25 @@ def montar_payload_ferias(cabecalho_row: dict, detalhe_rows: list[dict]) -> dict
             "texto": recibo_txt,
         },
         "rodape": {
-            "banco": "",
-            "agencia": "",
-            "conta": "",
-            "tipo_conta": "",
-            "folha": "",
+            "banco": _as_str(det0.get("codigobanco") or det0.get("nomebanco")),
+            "agencia": _as_str(det0.get("agenciatitulo")),
+            "conta": _as_str(det0.get("contatitulo")),
+            "tipo_conta": _as_str(det0.get("tipoctabanco")),
+            "folha": _as_str(det0.get("codigocontrato")),
+            "nome_banco": _as_str(det0.get("nomebanco")),
+            "lote": _as_str(det0.get("lote")),
+            "tipofat": _as_str(det0.get("tipofat")),
             "cpf": _only_digits(cabecalho_row.get("cpf")),
             "codigo_empresa": _as_str(cabecalho_row.get("cod_empresa")),
-            "endereco_empresa": "",
-            "cidade_empresa": cidade_exibicao,
-            "cidade": cidade_exibicao,
-            "cnpj": _as_str(cabecalho_row.get("cnpj")),
             "cod_filial": _as_str(cabecalho_row.get("cod_filial")),
             "cod_cliente": _as_str(cabecalho_row.get("cod_cliente")),
+            "empresa_nome": _as_str(cabecalho_row.get("empresa")),
+            "cidade_empresa": _as_str(cabecalho_row.get("cidade")),
+            "uf": uf,
+            "cnpj": _as_str(cabecalho_row.get("cnpj")),
+            "endereco_empresa": _as_str(cabecalho_row.get("endereco_empresa")),
+            "cidade": _as_str(cabecalho_row.get("cidade")),
+            "codigo_cidade": _as_str(cabecalho_row.get("codigo_cidade")),
         },
     }
 
@@ -2601,11 +2647,20 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
             d.qtde,
             d.competencia,
             d.valor,
-            d.tipo
+            d.tipo,
+            d.lote,
+            d.numerobcotitulo,
+            d.agenciatitulo,
+            d.contatitulo,
+            d.tipoctabanco,
+            d.codigocontrato,
+            d.tipofat,
+            d.codigobanco,
+            d.nomebanco
         FROM public.tb_ferias_detalhe d
         WHERE TRIM(d.matricula::text) = TRIM(:matricula)
-          AND TRIM(d.cod_empresa::text) = TRIM(:empresa)
-          AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
+        AND TRIM(d.cod_empresa::text) = TRIM(:empresa)
+        AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
         ORDER BY d.tipo, d.codigoevento
     """)
 
@@ -2724,14 +2779,22 @@ def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_d
             d.qtde,
             d.competencia,
             d.valor,
-            d.tipo
+            d.tipo,
+            d.lote,
+            d.numerobcotitulo,
+            d.agenciatitulo,
+            d.contatitulo,
+            d.tipoctabanco,
+            d.codigocontrato,
+            d.tipofat,
+            d.codigobanco,
+            d.nomebanco
         FROM public.tb_ferias_detalhe d
         WHERE TRIM(d.matricula::text) = TRIM(:matricula)
-          AND TRIM(d.cod_empresa::text) = TRIM(:empresa)
-          AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
+        AND TRIM(d.cod_empresa::text) = TRIM(:empresa)
+        AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
         ORDER BY d.tipo, d.codigoevento
     """)
-
     det_rows = db.execute(
         sql_det,
         {
