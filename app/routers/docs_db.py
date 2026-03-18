@@ -74,6 +74,9 @@ class MontarFerias(BaseModel):
     competencia: str = Field(..., min_length=1)
     empresa: str = Field(..., min_length=1)
 
+def _normalizar_cpf(cpf: Any) -> str:
+    digits = re.sub(r"\D", "", _as_str(cpf))
+    return digits.zfill(11)
 
 def _numero_ate_999(n: int) -> str:
     unidades = [
@@ -1934,13 +1937,12 @@ def montar_holerite(payload: MontarHolerite, db: Session = Depends(get_db)):
         "pdf_base64": pdf_base64,
     }
 
-
 @router.post("/documents/informe-rendimentos/competencias")
 def listar_competencias_informe_rendimentos(
     payload: BuscarCompetenciasInformeRendimentos = Body(...),
     db: Session = Depends(get_db),
 ):
-    cpf = _as_str(payload.cpf)
+    cpf = _normalizar_cpf(payload.cpf)
 
     if not cpf:
         raise HTTPException(status_code=422, detail="Informe cpf.")
@@ -1949,8 +1951,7 @@ def listar_competencias_informe_rendimentos(
         SELECT DISTINCT
             regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') AS comp
         FROM public.tb_informe_rendimentos
-        WHERE regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') =
-              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+        WHERE LPAD(regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g'), 11, '0') = :cpf
           AND competencia IS NOT NULL
           AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') ~ '^[0-9]{4}$'
         ORDER BY comp DESC
@@ -1978,7 +1979,7 @@ def buscar_informe_rendimentos(
     payload: BuscarInformeRendimentos = Body(...),
     db: Session = Depends(get_db),
 ):
-    cpf = _as_str(payload.cpf)
+    cpf = _normalizar_cpf(payload.cpf)
     competencia = _as_str(payload.competencia)
 
     if not cpf or not competencia:
@@ -2011,8 +2012,7 @@ def buscar_informe_rendimentos(
             SUM(COALESCE(abono_pecuniario, 0)) AS abono_pecuniario,
             SUM(COALESCE(rendimentos_isentos, 0)) AS rendimentos_isentos
         FROM public.tb_informe_rendimentos
-        WHERE regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') =
-              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+        WHERE LPAD(regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g'), 11, '0') = :cpf
           AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
               regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
     """)
@@ -2044,8 +2044,7 @@ def buscar_informe_rendimentos(
             valor,
             competencia
         FROM public.tb_informe_rendimentos_complementos_beneficios
-        WHERE regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') =
-              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+        WHERE LPAD(regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g'), 11, '0') = :cpf
           AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
               regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
         ORDER BY nome_titular, data_nascimento
@@ -2073,7 +2072,7 @@ def montar_informe_rendimentos(
     payload: MontarInformeRendimentos = Body(...),
     db: Session = Depends(get_db),
 ):
-    cpf = _as_str(payload.cpf)
+    cpf = _normalizar_cpf(payload.cpf)
     competencia = _as_str(payload.competencia)
 
     if not cpf or not competencia:
@@ -2106,8 +2105,7 @@ def montar_informe_rendimentos(
             SUM(COALESCE(abono_pecuniario, 0)) AS abono_pecuniario,
             SUM(COALESCE(rendimentos_isentos, 0)) AS rendimentos_isentos
         FROM public.tb_informe_rendimentos
-        WHERE regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') =
-              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+        WHERE LPAD(regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g'), 11, '0') = :cpf
           AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
               regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
     """)
@@ -2139,8 +2137,7 @@ def montar_informe_rendimentos(
             valor,
             competencia
         FROM public.tb_informe_rendimentos_complementos_beneficios
-        WHERE regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g') =
-              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+        WHERE LPAD(regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g'), 11, '0') = :cpf
           AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
               regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
         ORDER BY nome_titular, data_nascimento
@@ -2163,10 +2160,9 @@ def montar_informe_rendimentos(
             competencia,
             valor
         FROM public.tb_informe_rendimentos_complementos_pensoes
-        WHERE regexp_replace(TRIM(cpf_titular::text), '[^0-9]', '', 'g') =
-            regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
-        AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
-            regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
+        WHERE LPAD(regexp_replace(TRIM(cpf_titular::text), '[^0-9]', '', 'g'), 11, '0') = :cpf
+          AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
+              regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
         ORDER BY nome, data_nascimento
     """)
 
@@ -2190,7 +2186,6 @@ def montar_informe_rendimentos(
         "pensionistas": pensionistas,
         "pdf_base64": pdf_base64,
     }
-
 
 @router.post("/documents/beneficios/buscar")
 def buscar_beneficios(payload: dict = Body(...), db: Session = Depends(get_db)):
