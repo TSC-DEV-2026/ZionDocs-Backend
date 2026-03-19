@@ -56,8 +56,7 @@ class BuscarCompetenciasFerias(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
     matricula: str = Field(..., min_length=1)
-    empresa: str = Field(..., min_length=1)
-
+    cliente: str = Field(..., min_length=1)
 
 class BuscarFerias(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -2519,38 +2518,33 @@ def montar_beneficio(payload: dict = Body(...), db: Session = Depends(get_db)):
 
 
 @router.post("/documents/ferias/competencias")
-async def listar_competencias_ferias(
-    request: Request,
-    cpf: Optional[str] = Query(None),
-    matricula: Optional[str] = Query(None),
-    cliente: Optional[str] = Query(None),
+def listar_competencias_ferias(
+    payload: BuscarCompetenciasFerias = Body(...),
     db: Session = Depends(get_db),
 ):
-    if not matricula or not cliente:
-        try:
-            body = await request.json()
-            if isinstance(body, dict):
-                matricula = matricula or body.get("matricula")
-                cliente = cliente or body.get("cliente")
-        except Exception:
-            pass
+    cpf = _only_digits(payload.cpf)
+    matricula = _as_str(payload.matricula)
+    cliente = _as_str(payload.cliente)
 
-    if not matricula or not cliente:
+    if not cpf or not matricula or not cliente:
         raise HTTPException(
             status_code=422,
-            detail="Informe 'matricula' e 'cliente' (na querystring ou no body JSON).",
+            detail="Informe cpf, matricula e cliente.",
         )
 
     params = {
-        "matricula": _as_str(matricula),
-        "cliente": _as_str(cliente),
+        "cpf": cpf,
+        "matricula": matricula,
+        "cliente": cliente,
     }
 
     sql = text(f"""
         SELECT DISTINCT
             regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') AS comp
         FROM public.tb_ferias_cabecalho c
-        WHERE TRIM(c.matricula::text) = TRIM(:matricula)
+        WHERE COALESCE(NULLIF(LTRIM(regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g'), '0'), ''), '0') =
+              COALESCE(NULLIF(LTRIM(regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g'), '0'), ''), '0')
+          AND TRIM(c.matricula::text) = TRIM(:matricula)
           AND {_cliente_match_sql("c")}
           AND c.cpt1per IS NOT NULL
           AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') ~ '^[0-9]{{6}}$'
@@ -2572,7 +2566,6 @@ async def listar_competencias_ferias(
         )
 
     return {"competencias": competencias}
-
 
 @router.post("/documents/ferias/buscar")
 def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_db)):
@@ -2615,8 +2608,8 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
             (
                 SELECT COUNT(*)
                 FROM public.tb_ferias_cabecalho c
-                WHERE LPAD(regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g'), 11, '0') =
-                    LPAD(regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g'), 11, '0')
+                WHERE COALESCE(NULLIF(LTRIM(regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g'), '0'), ''), '0') =
+                    COALESCE(NULLIF(LTRIM(regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g'), '0'), ''), '0')
                 AND TRIM(c.matricula::text) = TRIM(:matricula)
                 AND {_cliente_match_sql("c")}
                 AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
@@ -2677,8 +2670,8 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
             c.uf,
             c.datapagto
         FROM public.tb_ferias_cabecalho c
-        WHERE regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g') =
-              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+        WHERE COALESCE(NULLIF(LTRIM(regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g'), '0'), ''), '0') =
+            COALESCE(NULLIF(LTRIM(regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g'), '0'), ''), '0')
           AND TRIM(c.matricula::text) = TRIM(:matricula)
           AND {_cliente_match_sql("c")}
           AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
@@ -2822,11 +2815,11 @@ def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_d
             c.uf,
             c.datapagto
         FROM public.tb_ferias_cabecalho c
-        WHERE LPAD(regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g'), 11, '0') =
-            LPAD(regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g'), 11, '0')
-          AND TRIM(c.matricula::text) = TRIM(:matricula)
-          AND {_cliente_match_sql("c")}
-          AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
+        WHERE COALESCE(NULLIF(LTRIM(regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g'), '0'), ''), '0') =
+            COALESCE(NULLIF(LTRIM(regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g'), '0'), ''), '0')
+        AND TRIM(c.matricula::text) = TRIM(:matricula)
+        AND {_cliente_match_sql("c")}
+        AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
         LIMIT 1
     """)
 
