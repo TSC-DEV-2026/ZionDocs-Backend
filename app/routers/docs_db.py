@@ -73,6 +73,11 @@ class MontarFerias(BaseModel):
     competencia: str = Field(..., min_length=1)
     cliente: str = Field(..., min_length=1)
 
+def _normalizar_cpf_ferias(cpf: Any) -> str:
+    digits = re.sub(r"\D", "", _as_str(cpf))
+    digits = digits.lstrip("0")
+    return digits or "0"
+
 def _normalizar_cpf(cpf: Any) -> str:
     digits = re.sub(r"\D", "", _as_str(cpf))
     return digits.zfill(11)
@@ -2571,7 +2576,7 @@ async def listar_competencias_ferias(
 
 @router.post("/documents/ferias/buscar")
 def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_db)):
-    cpf = _only_digits(payload.cpf)
+    cpf = _normalizar_cpf_ferias(payload.cpf)
     matricula = _as_str(payload.matricula)
     competencia = _as_str(payload.competencia)
     cliente = _as_str(payload.cliente)
@@ -2770,7 +2775,7 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
 
 @router.post("/documents/ferias/montar")
 def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_db)):
-    cpf = _normalizar_cpf(payload.cpf)
+    cpf = _normalizar_cpf_ferias(payload.cpf)
     matricula = _as_str(payload.matricula)
     competencia = _as_str(payload.competencia)
     cliente = _as_str(payload.cliente)
