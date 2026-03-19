@@ -373,6 +373,16 @@ def _empresa_match_sql(alias: str = "c") -> str:
         )
     """
 
+def _cliente_match_sql(alias: str) -> str:
+    return f"""
+        (
+            TRIM(COALESCE({alias}.cod_cliente::text, '')) = TRIM(:cliente)
+            OR
+            COALESCE(NULLIF(LTRIM(TRIM(COALESCE({alias}.cod_cliente::text, '')), '0'), ''), '0') =
+            COALESCE(NULLIF(LTRIM(TRIM(:cliente), '0'), ''), '0')
+        )
+    """
+
 
 def gerar_recibo_ferias_pdf(dados: dict) -> bytes:
     def as_str(v: Any) -> str:
@@ -1592,7 +1602,7 @@ async def listar_competencias_holerite(
     cliente: Optional[str] = Query(None, description="Alias antigo do código do cliente"),
     db: Session = Depends(get_db),
 ):
-    empresa = empresa or cliente
+    cliente = cliente
 
     if not cpf or not matricula or not empresa:
         try:
@@ -2298,7 +2308,7 @@ async def listar_competencias_beneficios(
     cliente: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    empresa = empresa or cliente
+    cliente = cliente
 
     if not cpf or not matricula or not empresa:
         try:
@@ -2509,40 +2519,37 @@ async def listar_competencias_ferias(
     request: Request,
     cpf: Optional[str] = Query(None),
     matricula: Optional[str] = Query(None),
-    empresa: Optional[str] = Query(None),
     cliente: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    empresa = empresa or cliente
-
-    if not matricula or not empresa:
+    if not matricula or not cliente:
         try:
             body = await request.json()
             if isinstance(body, dict):
                 matricula = matricula or body.get("matricula")
-                empresa = empresa or body.get("empresa") or body.get("cliente")
+                cliente = cliente or body.get("cliente")
         except Exception:
             pass
 
-    if not matricula or not empresa:
+    if not matricula or not cliente:
         raise HTTPException(
             status_code=422,
-            detail="Informe 'matricula' e 'empresa' (na querystring ou no body JSON).",
+            detail="Informe 'matricula' e 'cliente' (na querystring ou no body JSON).",
         )
 
     params = {
         "matricula": _as_str(matricula),
-        "empresa": _as_str(empresa),
+        "cliente": _as_str(cliente),
     }
 
-    sql = text("""
+    sql = text(f"""
         SELECT DISTINCT
             regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') AS comp
         FROM public.tb_ferias_cabecalho c
         WHERE TRIM(c.matricula::text) = TRIM(:matricula)
-          AND TRIM(c.cod_empresa::text) = TRIM(:empresa)
+          AND {_cliente_match_sql("c")}
           AND c.cpt1per IS NOT NULL
-          AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') ~ '^[0-9]{6}$'
+          AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') ~ '^[0-9]{{6}}$'
         ORDER BY comp DESC
     """)
 
@@ -2568,17 +2575,17 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
     cpf = _only_digits(payload.cpf)
     matricula = _as_str(payload.matricula)
     competencia = _as_str(payload.competencia)
-    empresa = _as_str(payload.empresa)
+    cliente = _as_str(payload.cliente)
 
-    if not cpf or not matricula or not competencia or not empresa:
+    if not cpf or not matricula or not competencia or not cliente:
         raise HTTPException(
             status_code=422,
-            detail="Informe cpf, matricula, competencia e empresa.",
+            detail="Informe cpf, matricula, competencia e cliente.",
         )
 
     comp_norm = _only_yyyymm(_normaliza_anomes(competencia) or competencia)
 
-    sql_cab = text("""
+    sql_cab = text(f"""
         SELECT
             c.cod_empresa,
             c.cod_filial,
@@ -2613,10 +2620,10 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
             c.datapagto
         FROM public.tb_ferias_cabecalho c
         WHERE regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g') =
-            regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
-        AND TRIM(c.matricula::text) = TRIM(:matricula)
-        AND TRIM(c.cod_empresa::text) = TRIM(:empresa)
-        AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
+              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+          AND TRIM(c.matricula::text) = TRIM(:matricula)
+          AND {_cliente_match_sql("c")}
+          AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
         LIMIT 1
     """)
 
@@ -2625,7 +2632,7 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
         {
             "cpf": cpf,
             "matricula": matricula,
-            "empresa": empresa,
+            "cliente": cliente,
             "competencia": comp_norm,
         },
     ).first()
@@ -2637,7 +2644,8 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
         )
 
     cabecalho = dict(cab_row._mapping)
-    sql_det = text("""
+
+    sql_det = text(f"""
         SELECT
             d.cod_empresa,
             d.cod_filial,
@@ -2659,8 +2667,8 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
             d.nomebanco
         FROM public.tb_ferias_detalhe d
         WHERE TRIM(d.matricula::text) = TRIM(:matricula)
-        AND TRIM(d.cod_empresa::text) = TRIM(:empresa)
-        AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
+          AND {_cliente_match_sql("d")}
+          AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
         ORDER BY d.tipo, d.codigoevento
     """)
 
@@ -2668,13 +2676,12 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
         sql_det,
         {
             "matricula": matricula,
-            "empresa": empresa,
+            "cliente": cliente,
             "competencia": comp_norm,
         },
     ).fetchall()
 
     detalhes = [dict(r._mapping) for r in det_rows]
-
     payload_pdf = montar_payload_ferias(cabecalho, detalhes)
 
     return {
@@ -2682,7 +2689,7 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
         "cpf": cpf,
         "matricula": matricula,
         "competencia": comp_norm,
-        "empresa": empresa,
+        "cliente": cliente,
         "total": 1,
         "ferias": [
             {
@@ -2699,17 +2706,17 @@ def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_d
     cpf = _only_digits(payload.cpf)
     matricula = _as_str(payload.matricula)
     competencia = _as_str(payload.competencia)
-    empresa = _as_str(payload.empresa)
+    cliente = _as_str(payload.cliente)
 
-    if not cpf or not matricula or not competencia or not empresa:
+    if not cpf or not matricula or not competencia or not cliente:
         raise HTTPException(
             status_code=422,
-            detail="Informe cpf, matricula, competencia e empresa.",
+            detail="Informe cpf, matricula, competencia e cliente.",
         )
 
     comp_norm = _only_yyyymm(_normaliza_anomes(competencia) or competencia)
 
-    sql_cab = text("""
+    sql_cab = text(f"""
         SELECT
             c.cod_empresa,
             c.cod_filial,
@@ -2744,10 +2751,10 @@ def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_d
             c.datapagto
         FROM public.tb_ferias_cabecalho c
         WHERE regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g') =
-            regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
-        AND TRIM(c.matricula::text) = TRIM(:matricula)
-        AND TRIM(c.cod_empresa::text) = TRIM(:empresa)
-        AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
+              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+          AND TRIM(c.matricula::text) = TRIM(:matricula)
+          AND {_cliente_match_sql("c")}
+          AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
         LIMIT 1
     """)
 
@@ -2756,7 +2763,7 @@ def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_d
         {
             "cpf": cpf,
             "matricula": matricula,
-            "empresa": empresa,
+            "cliente": cliente,
             "competencia": comp_norm,
         },
     ).first()
@@ -2769,7 +2776,7 @@ def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_d
 
     cabecalho = dict(cab_row._mapping)
 
-    sql_det = text("""
+    sql_det = text(f"""
         SELECT
             d.cod_empresa,
             d.cod_filial,
@@ -2791,21 +2798,21 @@ def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_d
             d.nomebanco
         FROM public.tb_ferias_detalhe d
         WHERE TRIM(d.matricula::text) = TRIM(:matricula)
-        AND TRIM(d.cod_empresa::text) = TRIM(:empresa)
-        AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
+          AND {_cliente_match_sql("d")}
+          AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
         ORDER BY d.tipo, d.codigoevento
     """)
+
     det_rows = db.execute(
         sql_det,
         {
             "matricula": matricula,
-            "empresa": empresa,
+            "cliente": cliente,
             "competencia": comp_norm,
         },
     ).fetchall()
 
     detalhes = [dict(r._mapping) for r in det_rows]
-
     dados_pdf = montar_payload_ferias(cabecalho, detalhes)
 
     raw_pdf = gerar_recibo_ferias_pdf(dados_pdf)
@@ -2816,7 +2823,7 @@ def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_d
         "cpf": cpf,
         "matricula": matricula,
         "competencia": comp_norm,
-        "empresa": empresa,
+        "cliente": cliente,
         "cabecalho": cabecalho,
         "detalhes": detalhes,
         "dados_pdf": dados_pdf,
