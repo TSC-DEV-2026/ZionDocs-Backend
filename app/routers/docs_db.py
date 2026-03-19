@@ -64,15 +64,14 @@ class BuscarFerias(BaseModel):
     cpf: str = Field(..., min_length=1)
     matricula: str = Field(..., min_length=1)
     competencia: str = Field(..., min_length=1)
-    empresa: str = Field(..., min_length=1)
-
+    cliente: str = Field(..., min_length=1)
 
 class MontarFerias(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
     matricula: str = Field(..., min_length=1)
     competencia: str = Field(..., min_length=1)
-    empresa: str = Field(..., min_length=1)
+    cliente: str = Field(..., min_length=1)
 
 def _normalizar_cpf(cpf: Any) -> str:
     digits = re.sub(r"\D", "", _as_str(cpf))
@@ -2585,6 +2584,60 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
 
     comp_norm = _only_yyyymm(_normaliza_anomes(competencia) or competencia)
 
+    debug_sql = text(f"""
+        SELECT
+            (
+                SELECT COUNT(*)
+                FROM public.tb_ferias_cabecalho c
+                WHERE TRIM(c.matricula::text) = TRIM(:matricula)
+            ) AS count_matricula,
+
+            (
+                SELECT COUNT(*)
+                FROM public.tb_ferias_cabecalho c
+                WHERE TRIM(c.matricula::text) = TRIM(:matricula)
+                AND {_cliente_match_sql("c")}
+            ) AS count_matricula_cliente,
+
+            (
+                SELECT COUNT(*)
+                FROM public.tb_ferias_cabecalho c
+                WHERE TRIM(c.matricula::text) = TRIM(:matricula)
+                AND {_cliente_match_sql("c")}
+                AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
+            ) AS count_matricula_cliente_comp,
+
+            (
+                SELECT COUNT(*)
+                FROM public.tb_ferias_cabecalho c
+                WHERE LPAD(regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g'), 11, '0') =
+                    LPAD(regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g'), 11, '0')
+                AND TRIM(c.matricula::text) = TRIM(:matricula)
+                AND {_cliente_match_sql("c")}
+                AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
+            ) AS count_final
+    """)
+    debug_row = db.execute(
+        debug_sql,
+        {
+            "cpf": cpf,
+            "matricula": matricula,
+            "cliente": cliente,
+            "competencia": comp_norm,
+        },
+    ).first()
+
+    debug_info = dict(debug_row._mapping) if debug_row else {}
+
+    print("DEBUG FERIAS BUSCAR PARAMS:", {
+        "cpf": cpf,
+        "matricula": matricula,
+        "cliente": cliente,
+        "competencia_original": competencia,
+        "competencia_normalizada": comp_norm,
+    })
+    print("DEBUG FERIAS BUSCAR COUNTS:", debug_info)
+
     sql_cab = text(f"""
         SELECT
             c.cod_empresa,
@@ -2640,12 +2693,21 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
     if not cab_row:
         raise HTTPException(
             status_code=404,
-            detail="Nenhum recibo de férias encontrado para os critérios informados.",
+            detail={
+                "message": "Nenhum recibo de férias encontrado para os critérios informados.",
+                "debug": debug_info,
+                "params": {
+                    "cpf": cpf,
+                    "matricula": matricula,
+                    "cliente": cliente,
+                    "competencia": comp_norm,
+                },
+            },
         )
 
     cabecalho = dict(cab_row._mapping)
 
-    sql_det = text(f"""
+    sql_det = text("""
         SELECT
             d.cod_empresa,
             d.cod_filial,
@@ -2664,11 +2726,17 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
             d.codigocontrato,
             d.tipofat,
             d.codigobanco,
-            d.nomebanco
+            d.nomebanco,
+            d.codigocliente
         FROM public.tb_ferias_detalhe d
         WHERE TRIM(d.matricula::text) = TRIM(:matricula)
-          AND {_cliente_match_sql("d")}
-          AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
+        AND (
+                TRIM(COALESCE(d.codigocliente::text, '')) = TRIM(:cliente)
+                OR
+                COALESCE(NULLIF(LTRIM(TRIM(COALESCE(d.codigocliente::text, '')), '0'), ''), '0') =
+                COALESCE(NULLIF(LTRIM(TRIM(:cliente), '0'), ''), '0')
+            )
+        AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
         ORDER BY d.tipo, d.codigoevento
     """)
 
@@ -2700,10 +2768,9 @@ def buscar_ferias(payload: BuscarFerias = Body(...), db: Session = Depends(get_d
         ],
     }
 
-
 @router.post("/documents/ferias/montar")
 def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_db)):
-    cpf = _only_digits(payload.cpf)
+    cpf = _normalizar_cpf(payload.cpf)
     matricula = _as_str(payload.matricula)
     competencia = _as_str(payload.competencia)
     cliente = _as_str(payload.cliente)
@@ -2750,8 +2817,8 @@ def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_d
             c.uf,
             c.datapagto
         FROM public.tb_ferias_cabecalho c
-        WHERE regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g') =
-              regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+        WHERE LPAD(regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g'), 11, '0') =
+            LPAD(regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g'), 11, '0')
           AND TRIM(c.matricula::text) = TRIM(:matricula)
           AND {_cliente_match_sql("c")}
           AND regexp_replace(TRIM(c.cpt1per::text), '[^0-9]', '', 'g') = :competencia
@@ -2776,7 +2843,7 @@ def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_d
 
     cabecalho = dict(cab_row._mapping)
 
-    sql_det = text(f"""
+    sql_det = text("""
         SELECT
             d.cod_empresa,
             d.cod_filial,
@@ -2795,11 +2862,17 @@ def montar_ferias(payload: MontarFerias = Body(...), db: Session = Depends(get_d
             d.codigocontrato,
             d.tipofat,
             d.codigobanco,
-            d.nomebanco
+            d.nomebanco,
+            d.codigocliente
         FROM public.tb_ferias_detalhe d
         WHERE TRIM(d.matricula::text) = TRIM(:matricula)
-          AND {_cliente_match_sql("d")}
-          AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
+        AND (
+                TRIM(COALESCE(d.codigocliente::text, '')) = TRIM(:cliente)
+                OR
+                COALESCE(NULLIF(LTRIM(TRIM(COALESCE(d.codigocliente::text, '')), '0'), ''), '0') =
+                COALESCE(NULLIF(LTRIM(TRIM(:cliente), '0'), ''), '0')
+            )
+        AND regexp_replace(TRIM(d.competencia::text), '[^0-9]', '', 'g') = :competencia
         ORDER BY d.tipo, d.codigoevento
     """)
 
