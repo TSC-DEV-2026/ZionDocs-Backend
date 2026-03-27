@@ -23,6 +23,7 @@ router = APIRouter()
 
 BASE_URL = "http://ged.byebyepaper.com.br:9090/idocs_bbpaper/api/v1"
 
+
 def login(conta: str, usuario: str, senha: str) -> str:
     payload = {
         "conta": conta,
@@ -52,35 +53,41 @@ def _extract_base64(raw: str) -> str:
     m = re.match(r"^data:.*?;base64,(.*)$", raw, flags=re.IGNORECASE | re.DOTALL)
     return m.group(1) if m else raw
 
+
 def _sanitize_ip(ip_raw: Optional[str]) -> str:
     """Normaliza e valida IPv4/IPv6 para coluna INET; se inválido, usa 0.0.0.0."""
     if not ip_raw:
         return "0.0.0.0"
+
     ip = ip_raw.strip()
-    if "," in ip:  # X-Forwarded-For pode trazer lista
+
+    if "," in ip:
         ip = ip.split(",")[0].strip()
-    # IPv4 com porta (1.2.3.4:12345)
+
     if ":" in ip and ip.count(":") == 1 and re.match(r"^\d{1,3}(\.\d{1,3}){3}:\d+$", ip):
         ip = ip.split(":")[0]
-    # IPv6 com colchetes
+
     ip = ip.strip("[]")
+
     try:
         ipaddress.ip_address(ip)
         return ip
     except ValueError:
         return "0.0.0.0"
 
+
 def _get_client_ip(request: Request) -> str:
     xff = request.headers.get("x-forwarded-for")
     return _sanitize_ip(xff if xff else (request.client.host if request.client else None))
 
+
 def _to_str_date(v) -> str:
-    # v é datetime.date
     return v.isoformat() if v is not None else None
 
+
 def _to_str_time(v) -> str:
-    # v é datetime.time
     return v.strftime("%H:%M:%S") if v is not None else None
+
 
 def _record_to_out(obj: StatusDocumento) -> StatusDocOutWithFile:
     b64 = base64.b64encode(obj.arquivo).decode("utf-8") if obj.arquivo else None
@@ -98,15 +105,48 @@ def _record_to_out(obj: StatusDocumento) -> StatusDocOutWithFile:
         base64=b64,
     )
 
+
+def _get_bearer_token(request: Request) -> Optional[str]:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return None
+
+    parts = auth_header.split(" ", 1)
+    if len(parts) != 2:
+        return None
+
+    scheme, token = parts
+    if scheme.lower() != "bearer":
+        return None
+
+    token = token.strip()
+    return token or None
+
+
+def _get_access_token_from_request(request: Request) -> Optional[str]:
+    cookie_token = request.cookies.get("access_token")
+    if cookie_token:
+        return cookie_token
+
+    bearer_token = _get_bearer_token(request)
+    if bearer_token:
+        return bearer_token
+
+    return None
+
+
 @router.get("/documents", response_model=List[TipoDocumentoResponse])
 def listar_tipos_documentos(request: Request, db: Session = Depends(get_db)):
-    access_token = request.cookies.get("access_token")
+    access_token = _get_access_token_from_request(request)
     if not access_token:
         raise HTTPException(status_code=401, detail="Token de autenticação ausente")
 
     payload = verificar_token(access_token)
     if not payload:
         raise HTTPException(status_code=401, detail="Token inválido")
+
+    if payload.get("tipo") and payload.get("tipo") != "access":
+        raise HTTPException(status_code=401, detail="Tipo de token inválido")
 
     pessoa_id = payload.get("id")
     pessoa = db.query(Pessoa).filter(Pessoa.id == pessoa_id).first()
@@ -167,11 +207,11 @@ def listar_tipos_documentos(request: Request, db: Session = Depends(get_db)):
                 TipoDocumento.nome.ilike("%informe rendimento%"),
                 TipoDocumento.nome.ilike("%trtc%"),
                 TipoDocumento.nome.ilike("%recibo ferias%"),
-
             )
         ).all()
 
     return documentos
+
 
 @router.post("/documents/delete", response_model=DeletarDocumentosResponse)
 def deletar_documentos_por_query(payload: DeletarDocumentosRequest):
@@ -186,7 +226,6 @@ def deletar_documentos_por_query(payload: DeletarDocumentosRequest):
         "Content-Type": "application/x-www-form-urlencoded; charset=ISO-8859-1"
     }
 
-    # Buscar campos do template
     response_fields = requests.post(
         f"{BASE_URL}/templates/getfields",
         data={"id_template": payload.id_template},
@@ -197,14 +236,12 @@ def deletar_documentos_por_query(payload: DeletarDocumentosRequest):
 
     campos_template = response_fields.json().get("fields", [])
 
-    # Montar lista cp[]
     lista_cp = [""] * len(campos_template)
     for idx, campo in enumerate(campos_template):
         if campo.get("nomecampo") == payload.campo:
             lista_cp[idx] = payload.valor
             break
 
-    # Payload de busca
     payload_busca = [("id_tipo", str(payload.id_template))]
     for valor in lista_cp:
         payload_busca.append(("cp[]", valor))
@@ -216,7 +253,6 @@ def deletar_documentos_por_query(payload: DeletarDocumentosRequest):
         ("colecao", "S")
     ])
 
-    # Requisição de busca
     response_busca = requests.post(
         f"{BASE_URL}/documents/search",
         data=payload_busca,
@@ -259,6 +295,7 @@ def deletar_documentos_por_query(payload: DeletarDocumentosRequest):
         "falhas": erros
     }
 
+
 @router.post(
     "/status-doc",
     response_model=StatusDocOut,
@@ -266,16 +303,15 @@ def deletar_documentos_por_query(payload: DeletarDocumentosRequest):
     summary="Grava aceite e arquivo (sem autenticação)",
 )
 def criar_status_doc(payload: StatusDocCreate, request: Request, db: Session = Depends(get_db)):
-    # 1) decodifica base64 -> bytes
     try:
         b64 = _extract_base64(payload.base64)
         arquivo_bytes = base64.b64decode(b64, validate=True) if b64 else None
     except (binascii.Error, ValueError):
         raise HTTPException(status_code=400, detail="base64 inválido")
+
     if isinstance(arquivo_bytes, str):
         arquivo_bytes = arquivo_bytes.encode("utf-8")
 
-    # 2) checa duplicidade de UUID (validação de aplicação)
     if payload.uuid:
         existente = (
             db.query(StatusDocumento)
@@ -290,7 +326,6 @@ def criar_status_doc(payload: StatusDocCreate, request: Request, db: Session = D
 
     ip = _get_client_ip(request)
 
-    # 3) cria registro (id_ged agora é TEXT)
     registro = StatusDocumento(
         aceito=payload.aceito,
         ip_usuario=ip,
@@ -301,10 +336,9 @@ def criar_status_doc(payload: StatusDocCreate, request: Request, db: Session = D
         competencia=payload.competencia,
         arquivo=(memoryview(arquivo_bytes) if arquivo_bytes is not None else None),
         uuid=(payload.uuid or None),
-        id_ged=(payload.id_ged or None),  # ✅ string opcional
+        id_ged=(payload.id_ged or None),
     )
 
-    # 4) persiste com proteção a corrida (constraint UNIQUE no banco p/ uuid)
     try:
         db.add(registro)
         db.commit()
@@ -320,14 +354,13 @@ def criar_status_doc(payload: StatusDocCreate, request: Request, db: Session = D
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Erro ao gravar no banco: {getattr(e, 'orig', e)}")
 
-# <<< ALTERAÇÃO: nova rota de consulta via payload (sem arquivo no retorno)
+
 @router.post(
     "/status-doc/consultar",
     response_model=StatusDocOut,
     summary="Consulta status do documento via payload (prioriza UUID + tipo_doc) — sem arquivo",
 )
 def consultar_status_doc(payload: StatusDocQuery, db: Session = Depends(get_db)):
-    # 1) Prioridade: UUID + tipo_doc
     if payload.uuid and payload.tipo_doc:
         sql = text("""
             SELECT sd.*
@@ -343,7 +376,6 @@ def consultar_status_doc(payload: StatusDocQuery, db: Session = Depends(get_db))
             if obj:
                 return _record_to_out(obj)
 
-    # 2) Fallback: UUID isolado
     if payload.uuid:
         obj = (
             db.query(StatusDocumento)
@@ -354,7 +386,6 @@ def consultar_status_doc(payload: StatusDocQuery, db: Session = Depends(get_db))
         if obj:
             return _record_to_out(obj)
 
-    # 3) Fallback: ID_GED
     if payload.id_ged:
         obj = (
             db.query(StatusDocumento)
@@ -365,13 +396,11 @@ def consultar_status_doc(payload: StatusDocQuery, db: Session = Depends(get_db))
         if obj:
             return _record_to_out(obj)
 
-    # 4) Fallback: ID
     if payload.id is not None:
         obj = db.get(StatusDocumento, payload.id)
         if obj:
             return _record_to_out(obj)
 
-    # 5) Fallback: cpf/matricula/competencia
     if payload.cpf and payload.matricula and payload.competencia:
         sql = text("""
             SELECT sd.*
@@ -394,7 +423,4 @@ def consultar_status_doc(payload: StatusDocQuery, db: Session = Depends(get_db))
             if obj:
                 return _record_to_out(obj)
 
-    # 6) Não achou
     raise HTTPException(status_code=404, detail="Registro não encontrado para os critérios informados")
-
-

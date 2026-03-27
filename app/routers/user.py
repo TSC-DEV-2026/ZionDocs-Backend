@@ -4,7 +4,7 @@ import re
 import secrets
 from datetime import datetime, timedelta
 import traceback
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -37,30 +37,160 @@ from dotenv import load_dotenv
 router = APIRouter()
 
 load_dotenv()
-is_prod = os.getenv('ENVIRONMENT') == "prod"
+is_prod = os.getenv("ENVIRONMENT") == "prod"
 
 cookie_domain = "ziondocs.com.br" if is_prod else None
 
 cookie_env = {
     "secure": True if is_prod else False,
     "samesite": "Lax",
-    "domain": cookie_domain
+    "domain": cookie_domain,
 }
+
+ACCESS_TOKEN_MINUTES = 60 * 24 * 7
+REFRESH_TOKEN_MINUTES = 60 * 24 * 30
+
 
 def _norm_digits(v: str) -> str:
     return "".join(ch for ch in str(v or "") if ch.isdigit())
 
+
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
 
 def _token_is_expired(data_criacao, hora_criacao, tempo_expiracao_min: int) -> bool:
     created_dt = datetime.combine(data_criacao, hora_criacao)
     exp_dt = created_dt + timedelta(minutes=int(tempo_expiracao_min or 0))
     return datetime.now() > exp_dt
 
+
 def _gen_reset_code() -> str:
-    # token curto pra digitar no front (6 dígitos)
     return f"{secrets.randbelow(1000000):06d}"
+
+
+def is_email(valor: str) -> bool:
+    return re.match(r"[^@]+@[^@]+\.[^@]+", str(valor or "").strip()) is not None
+
+
+def get_bearer_token(request: Request) -> Optional[str]:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return None
+
+    parts = auth_header.split(" ", 1)
+    if len(parts) != 2:
+        return None
+
+    scheme, token = parts
+    if scheme.lower() != "bearer":
+        return None
+
+    token = token.strip()
+    return token or None
+
+
+def get_access_token_from_request(request: Request) -> Optional[str]:
+    token = request.cookies.get("access_token")
+    if token:
+        return token
+    return get_bearer_token(request)
+
+
+def get_refresh_token_from_request(request: Request) -> Optional[str]:
+    token = request.cookies.get("refresh_token")
+    if token:
+        return token
+    return get_bearer_token(request)
+
+
+def get_usuario_from_login(db: Session, login_value: str) -> Optional[Usuario]:
+    login_value = str(login_value or "").strip()
+
+    if is_email(login_value):
+        return db.query(Usuario).filter(Usuario.email == login_value).first()
+
+    pessoa = db.query(Pessoa).filter(Pessoa.cpf == login_value).first()
+    if not pessoa:
+        return None
+
+    return db.query(Usuario).filter(Usuario.id_pessoa == pessoa.id).first()
+
+
+def build_auth_payload(usuario: Usuario):
+    access_token = criar_token(
+        {"id": usuario.id_pessoa, "sub": usuario.email, "tipo": "access"},
+        expires_in=ACCESS_TOKEN_MINUTES,
+    )
+    refresh_token = criar_token(
+        {"id": usuario.id_pessoa, "sub": usuario.email, "tipo": "refresh"},
+        expires_in=REFRESH_TOKEN_MINUTES,
+    )
+    return access_token, refresh_token
+
+
+def set_auth_cookies(response: Response, access_token: str, refresh_token: str):
+    response.set_cookie(
+        "access_token",
+        access_token,
+        httponly=True,
+        max_age=60 * 60 * 24 * 7,
+        path="/",
+        **cookie_env,
+    )
+    response.set_cookie(
+        "refresh_token",
+        refresh_token,
+        httponly=True,
+        max_age=60 * 60 * 24 * 30,
+        path="/",
+        **cookie_env,
+    )
+    response.set_cookie(
+        "logged_user",
+        "true",
+        httponly=False,
+        max_age=60 * 60 * 24 * 7,
+        path="/",
+        **cookie_env,
+    )
+
+
+def clear_auth_cookies(response: Response):
+    response.delete_cookie("access_token", path="/", domain=cookie_domain)
+    response.delete_cookie("refresh_token", path="/", domain=cookie_domain)
+    response.delete_cookie("logged_user", path="/", domain=cookie_domain)
+
+
+def get_current_auth(request: Request, db: Session):
+    access_token = get_access_token_from_request(request)
+    if not access_token:
+        raise HTTPException(status_code=401, detail="Token de autenticação ausente")
+
+    payload = verificar_token(access_token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token inválido")
+
+    if payload.get("tipo") != "access":
+        raise HTTPException(status_code=401, detail="Tipo de token inválido")
+
+    jti = payload.get("jti")
+    if not jti:
+        raise HTTPException(status_code=401, detail="Token sem identificador único (jti)")
+
+    if db.query(TokenBlacklist).filter_by(jti=jti).first():
+        raise HTTPException(status_code=401, detail="Token expirado ou inválido")
+
+    pessoa_id = payload.get("id")
+    pessoa = db.query(Pessoa).filter(Pessoa.id == pessoa_id).first()
+    if not pessoa:
+        raise HTTPException(status_code=401, detail="Pessoa não encontrada")
+
+    usuario = db.query(Usuario).filter(Usuario.id_pessoa == pessoa.id).first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    return payload, pessoa, usuario
 
 
 @router.post(
@@ -72,21 +202,7 @@ def internal_send_token(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    access_token = request.cookies.get("access_token")
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Token de autenticação ausente")
-
-    payload = verificar_token(access_token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Token inválido")
-
-    pessoa_id = payload.get("id")
-    if not pessoa_id:
-        raise HTTPException(status_code=401, detail="Token sem id")
-
-    pessoa = db.query(Pessoa).filter(Pessoa.id == pessoa_id).first()
-    if not pessoa:
-        raise HTTPException(status_code=401, detail="Pessoa não encontrada")
+    _, pessoa, _ = get_current_auth(request, db)
 
     if not bool(getattr(pessoa, "interno", False)):
         raise HTTPException(status_code=403, detail="Pessoa não é interna")
@@ -144,21 +260,7 @@ def internal_validate_token(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    access_token = request.cookies.get("access_token")
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Token de autenticação ausente")
-
-    payload = verificar_token(access_token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Token inválido")
-
-    pessoa_id = payload.get("id")
-    if not pessoa_id:
-        raise HTTPException(status_code=401, detail="Token sem id")
-
-    pessoa = db.query(Pessoa).filter(Pessoa.id == pessoa_id).first()
-    if not pessoa:
-        return InternalValidateTokenResponse(valid=False, reason="pessoa_not_found")
+    _, pessoa, _ = get_current_auth(request, db)
 
     if not bool(getattr(pessoa, "interno", False)):
         return InternalValidateTokenResponse(valid=False, reason="not_internal")
@@ -208,10 +310,13 @@ def registrar_usuario(
     payload: CadastroPessoa,
     db: Session = Depends(get_db),
 ):
-    if db.query(Pessoa).filter(Pessoa.cpf == payload.pessoa.cpf).first():
+    cpf = str(payload.pessoa.cpf or "").strip()
+    email = str(payload.usuario.email or "").strip().lower()
+
+    if db.query(Pessoa).filter(Pessoa.cpf == cpf).first():
         raise HTTPException(400, "CPF já cadastrado")
 
-    if db.query(Usuario).filter(Usuario.email == payload.usuario.email).first():
+    if db.query(Usuario).filter(Usuario.email == email).first():
         raise HTTPException(400, "Email já cadastrado")
 
     pessoa = Pessoa(**payload.pessoa.dict())
@@ -221,13 +326,18 @@ def registrar_usuario(
 
     usuario = Usuario(
         id_pessoa=pessoa.id,
-        email=payload.usuario.email,
+        email=email,
         senha=gerar_hash_senha(payload.usuario.senha)
     )
     db.add(usuario)
     db.commit()
+    db.refresh(usuario)
 
-    return pessoa
+    return {
+        "message": "Usuário cadastrado com sucesso",
+        "id_pessoa": pessoa.id,
+        "email": usuario.email,
+    }
 
 
 @router.post(
@@ -242,59 +352,29 @@ def login_user(
     print("[LOGIN] Requisição recebida:", {"usuario": payload.usuario})
 
     try:
-        def is_email(valor: str) -> bool:
-            return re.match(r"[^@]+@[^@]+\.[^@]+", valor) is not None
-
-        if is_email(payload.usuario):
-            print("[LOGIN] Tipo: email")
-            usuario = db.query(Usuario).filter(Usuario.email == payload.usuario).first()
-        else:
-            print("[LOGIN] Tipo: cpf")
-            pessoa = db.query(Pessoa).filter(Pessoa.cpf == payload.usuario).first()
-
-            if not pessoa:
-                print("[LOGIN] Pessoa não encontrada para CPF:", payload.usuario)
-                raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
-
-            print("[LOGIN] Pessoa encontrada:", {"id": pessoa.id, "cpf": pessoa.cpf})
-            usuario = db.query(Usuario).filter(Usuario.id_pessoa == pessoa.id).first()
+        usuario = get_usuario_from_login(db, payload.usuario)
 
         if not usuario:
-            print("[LOGIN] Usuário não encontrado (tb_usuario) para:", payload.usuario)
+            print("[LOGIN] Usuário não encontrado:", payload.usuario)
             raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
 
-        print("[LOGIN] Usuário encontrado:", {"id": usuario.id, "id_pessoa": usuario.id_pessoa, "email": usuario.email})
+        print("[LOGIN] Usuário encontrado:", {
+            "id": usuario.id,
+            "id_pessoa": usuario.id_pessoa,
+            "email": usuario.email,
+        })
 
-        if payload.senha != usuario.senha:
+        if not verificar_senha(payload.senha, usuario.senha):
             print("[LOGIN] Senha inválida para usuário:", usuario.email)
             raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
 
-        print("[LOGIN] Senha OK, gerando tokens...")
+        access_token, refresh_token = build_auth_payload(usuario)
 
-        access_token = criar_token(
-            {"id": usuario.id_pessoa, "sub": usuario.email, "tipo": "access"},
-            expires_in=60 * 24 * 7
-        )
-        refresh_token = criar_token(
-            {"id": usuario.id_pessoa, "sub": usuario.email, "tipo": "refresh"},
-            expires_in=60 * 24 * 30
-        )
-
-        print("[LOGIN] Tokens gerados, setando cookies...")
-
-        response = JSONResponse(content={"message": "Login com sucesso"})
-        response.set_cookie(
-            "access_token", access_token,
-            httponly=True, max_age=60 * 60 * 24 * 7, path="/", **cookie_env
-        )
-        response.set_cookie(
-            "refresh_token", refresh_token,
-            httponly=True, max_age=60 * 60 * 24 * 30, path="/", **cookie_env
-        )
-        response.set_cookie(
-            "logged_user", "true",
-            httponly=False, max_age=60 * 60 * 24 * 7, path="/", **cookie_env
-        )
+        response = JSONResponse(content={
+            "message": "Login com sucesso",
+            "mode": "cookie",
+        })
+        set_auth_cookies(response, access_token, refresh_token)
 
         print("[LOGIN] OK - resposta retornada.")
         return response
@@ -309,31 +389,37 @@ def login_user(
         raise HTTPException(status_code=500, detail="Erro interno no login")
 
 
+@router.post(
+    "/user/login-mobile",
+    response_model=None,
+    status_code=status.HTTP_200_OK
+)
+def login_user_mobile(
+    payload: UsuarioLogin,
+    db: Session = Depends(get_db),
+):
+    usuario = get_usuario_from_login(db, payload.usuario)
+
+    if not usuario:
+        raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
+
+    if not verificar_senha(payload.senha, usuario.senha):
+        raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
+
+    access_token, refresh_token = build_auth_payload(usuario)
+
+    return {
+        "message": "Login com sucesso",
+        "mode": "bearer",
+        "token_type": "bearer",
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+    }
+
+
 @router.get("/user/me", response_model=PessoaResponse)
 def get_me(request: Request, db: Session = Depends(get_db)):
-    access_token = request.cookies.get("access_token")
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Token de autenticação ausente")
-
-    payload = verificar_token(access_token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Token inválido")
-
-    jti = payload.get("jti")
-    if not jti:
-        raise HTTPException(status_code=401, detail="Token sem identificador único (jti)")
-
-    if db.query(TokenBlacklist).filter_by(jti=jti).first():
-        raise HTTPException(status_code=401, detail="Token expirado ou inválido")
-
-    pessoa_id = payload.get("id")
-    pessoa = db.query(Pessoa).filter(Pessoa.id == pessoa_id).first()
-    if not pessoa:
-        raise HTTPException(status_code=401, detail="Pessoa não encontrada")
-
-    usuario = db.query(Usuario).filter(Usuario.id_pessoa == pessoa.id).first()
-    if not usuario:
-        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    _, pessoa, usuario = get_current_auth(request, db)
 
     cpf_pessoa = str(pessoa.cpf or "").strip()
     mat_pessoa = str(getattr(pessoa, "matricula", "") or "").strip()
@@ -437,39 +523,70 @@ def refresh_token(request: Request, db: Session = Depends(get_db)):
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
-    novo_auth = criar_token({"id": usuario.id_pessoa, "sub": usuario.email, "tipo": "access"}, expires_in=60 * 24 * 7)
+    novo_access, novo_refresh = build_auth_payload(usuario)
 
-    response = JSONResponse(content={"message": "Token renovado"})
-    response.set_cookie("access_token", novo_auth, httponly=True, path="/", max_age=60 * 60 * 24 * 7, **cookie_env)
-    response.set_cookie("logged_user", "true", httponly=False, path="/", max_age=60 * 60 * 24 * 7, **cookie_env)
-
+    response = JSONResponse(content={
+        "message": "Token renovado",
+        "mode": "cookie",
+    })
+    set_auth_cookies(response, novo_access, novo_refresh)
     return response
 
 
+@router.post("/user/refresh-mobile")
+def refresh_token_mobile(request: Request, db: Session = Depends(get_db)):
+    token = get_bearer_token(request)
+    if not token:
+        raise HTTPException(status_code=400, detail="refreshToken não fornecido")
+
+    payload = verificar_token(token)
+    if not payload or payload.get("tipo") != "refresh":
+        raise HTTPException(status_code=401, detail="refreshToken inválido ou expirado")
+
+    email = payload.get("sub")
+    if not email:
+        raise HTTPException(status_code=401, detail="Token inválido")
+
+    usuario = db.query(Usuario).filter(Usuario.email == email).first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    novo_access, novo_refresh = build_auth_payload(usuario)
+
+    return {
+        "message": "Token renovado",
+        "mode": "bearer",
+        "token_type": "bearer",
+        "access_token": novo_access,
+        "refresh_token": novo_refresh,
+    }
+
+
 @router.post("/user/logout")
-def logout(request: Request, response: Response, db: Session = Depends(get_db)):
-    token = request.cookies.get("access_token")
+def logout(request: Request, db: Session = Depends(get_db)):
+    token = get_access_token_from_request(request)
+
     if token:
         try:
             payload = decode_token(token)
             jti = payload.get("jti")
-            exp = datetime.fromtimestamp(payload.get("exp"))
-            db.add(TokenBlacklist(jti=jti, expira_em=exp))
-            db.commit()
+            exp_ts = payload.get("exp")
+
+            if jti and exp_ts:
+                exists = db.query(TokenBlacklist).filter_by(jti=jti).first()
+                if not exists:
+                    exp = datetime.fromtimestamp(exp_ts)
+                    db.add(TokenBlacklist(jti=jti, expira_em=exp))
+                    db.commit()
         except Exception as e:
             print(f"[ERRO LOGOUT] {e}")
     else:
         print("[LOGOUT] Token não enviado")
 
-    response.delete_cookie("access_token", path="/", domain=cookie_domain)
-    response.delete_cookie("refresh_token", path="/", domain=cookie_domain)
-    response.delete_cookie("logged_user", path="/", domain=cookie_domain)
+    response = JSONResponse(content={"message": "Logout realizado com sucesso"})
+    clear_auth_cookies(response)
+    return response
 
-    return {"message": "Logout realizado com sucesso"}
-
-# ==========================================================
-# NOVO: Recuperação de senha (sem login)
-# ==========================================================
 
 @router.post(
     "/user/request-password-reset",
@@ -484,11 +601,9 @@ def request_password_reset(
     if not usuario_login:
         raise HTTPException(status_code=400, detail="Usuário inválido")
 
-    # Se for CPF, normaliza dígitos (pq tb_usuario.email pode ter CPF com máscara)
     is_cpf = re.fullmatch(r"[\d.\-]+", usuario_login or "") is not None
     usuario_norm = _norm_digits(usuario_login) if is_cpf else usuario_login.strip().lower()
 
-    # 1) Busca id_pessoa via tb_usuario.email (que pode ser CPF ou email-login)
     sql_find = text("""
         SELECT
             u.id_pessoa,
@@ -517,11 +632,9 @@ def request_password_reset(
     nome_pessoa = str(row[1] or "Usuário").strip() or "Usuário"
     email_destino = str(row[2] or "").strip().lower()
 
-    # 2) Email real para envio precisa existir na tb_pessoa
     if not email_destino or "@" not in email_destino:
         raise HTTPException(status_code=400, detail="Pessoa sem e-mail válido cadastrado")
 
-    # 3) Inativa tokens antigos
     db.query(PasswordResetToken).filter(
         PasswordResetToken.id_pessoa == id_pessoa,
         PasswordResetToken.inativo == False,
@@ -529,8 +642,7 @@ def request_password_reset(
     ).update({"inativo": True}, synchronize_session=False)
     db.commit()
 
-    # 4) Gera token curto e salva hash
-    token_plain = _gen_reset_code()  # 6 dígitos
+    token_plain = _gen_reset_code()
     token_hash = _hash_token(token_plain)
 
     now = datetime.now()
@@ -583,7 +695,6 @@ def reset_password(
     is_cpf = re.fullmatch(r"[\d.\-]+", usuario_login or "") is not None
     usuario_norm = _norm_digits(usuario_login) if is_cpf else usuario_login.strip().lower()
 
-    # 1) Resolve id_pessoa e CPF real pela tb_pessoa (para atualizar todos os vínculos)
     sql_resolve = text("""
         SELECT
             u.id_pessoa,
@@ -608,7 +719,6 @@ def reset_password(
     if not cpf_digits:
         raise HTTPException(status_code=400, detail="CPF inválido para redefinição")
 
-    # 2) Valida token (hash) na tb_password_reset_token
     token_hash = _hash_token(token_plain)
 
     token_row = (
@@ -629,7 +739,6 @@ def reset_password(
         db.commit()
         raise HTTPException(status_code=400, detail="Código expirado")
 
-    # 3) Marca token como usado e inativa outros
     token_row.usado = True
     token_row.inativo = True
 
@@ -641,7 +750,8 @@ def reset_password(
 
     db.commit()
 
-    # 4) Atualiza senha de todos os usuários do CPF (igual seu update-password)
+    senha_hash = gerar_hash_senha(nova_senha)
+
     sql_update = text("""
         UPDATE app_rh.tb_usuario u
         SET
@@ -654,7 +764,7 @@ def reset_password(
                 = regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
     """)
 
-    result = db.execute(sql_update, {"senha_nova": nova_senha, "cpf": cpf_digits})
+    result = db.execute(sql_update, {"senha_nova": senha_hash, "cpf": cpf_digits})
     db.commit()
 
     updated_rows = result.rowcount or 0
@@ -663,33 +773,15 @@ def reset_password(
 
     return PasswordResetResponse(ok=True, message="Senha redefinida com sucesso")
 
+
 @router.put("/user/update-password")
 def update_password(
     body: AtualizarSenhaRequest,
     request: Request,
     db: Session = Depends(get_db),
 ):
-    access_token = request.cookies.get("access_token")
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Token de autenticação ausente")
+    _, pessoa, _ = get_current_auth(request, db)
 
-    payload = verificar_token(access_token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Token inválido")
-
-    jti = payload.get("jti")
-    if not jti:
-        raise HTTPException(status_code=401, detail="Token sem identificador único (jti)")
-
-    if db.query(TokenBlacklist).filter_by(jti=jti).first():
-        raise HTTPException(status_code=401, detail="Token expirado ou inválido")
-
-    pessoa_id = payload.get("id")
-    pessoa = db.query(Pessoa).filter(Pessoa.id == pessoa_id).first()
-    if not pessoa:
-        raise HTTPException(status_code=401, detail="Pessoa não encontrada")
-
-    # Normaliza CPF enviado e CPF do usuário autenticado
     cpf_body = "".join(ch for ch in str(body.cpf or "") if ch.isdigit())
     cpf_pessoa = "".join(ch for ch in str(pessoa.cpf or "") if ch.isdigit())
 
@@ -699,27 +791,24 @@ def update_password(
     if body.senha_atual == body.senha_nova:
         raise HTTPException(status_code=400, detail="A nova senha não pode ser igual à senha antiga")
 
-    # 1) Confere se existe ao menos um usuário daquele CPF com a senha atual informada
-    sql_check = text("""
-        SELECT 1
-        FROM app_rh.tb_usuario u
-        JOIN app_rh.tb_pessoa p ON p.id = u.id_pessoa
-        WHERE
-            regexp_replace(TRIM(p.cpf::text), '[^0-9]', '', 'g')
-                = regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
-            AND COALESCE(u.senha::text, '') = :senha_atual
-        LIMIT 1
-    """)
+    usuarios_do_cpf = (
+        db.query(Usuario, Pessoa)
+        .join(Pessoa, Pessoa.id == Usuario.id_pessoa)
+        .all()
+    )
 
-    ok = db.execute(
-        sql_check,
-        {"cpf": cpf_body, "senha_atual": body.senha_atual},
-    ).scalar()
+    encontrou_senha_atual = False
+    for usuario_item, pessoa_item in usuarios_do_cpf:
+        cpf_item = "".join(ch for ch in str(pessoa_item.cpf or "") if ch.isdigit())
+        if cpf_item == cpf_body and verificar_senha(body.senha_atual, usuario_item.senha):
+            encontrou_senha_atual = True
+            break
 
-    if not ok:
+    if not encontrou_senha_atual:
         raise HTTPException(status_code=400, detail="Senha antiga incorreta")
 
-    # 2) Atualiza TODOS os vínculos do CPF (todas as empresas)
+    senha_hash = gerar_hash_senha(body.senha_nova)
+
     sql_update = text("""
         UPDATE app_rh.tb_usuario u
         SET
@@ -734,7 +823,7 @@ def update_password(
 
     result = db.execute(
         sql_update,
-        {"senha_nova": body.senha_nova, "cpf": cpf_body},
+        {"senha_nova": senha_hash, "cpf": cpf_body},
     )
     db.commit()
 
@@ -747,4 +836,3 @@ def update_password(
         "senha_trocada": True,
         "usuarios_atualizados": updated_rows,
     }
-
