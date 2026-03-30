@@ -31,7 +31,7 @@ from app.schemas.user import (
 )
 from app.utils.email_sender import send_email_smtp
 from app.utils.jwt_handler import criar_token, decode_token, verificar_token
-from app.utils.password import gerar_hash_senha, verificar_senha
+from app.utils.password import gerar_hash_senha, verificar_senha, senha_esta_hasheada
 from dotenv import load_dotenv
 
 router = APIRouter()
@@ -364,9 +364,18 @@ def login_user(
             "email": usuario.email,
         })
 
-        if not verificar_senha(payload.senha, usuario.senha):
+        senha_ok = verificar_senha(payload.senha, usuario.senha)
+
+        if not senha_ok:
             print("[LOGIN] Senha inválida para usuário:", usuario.email)
             raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
+
+        if not senha_esta_hasheada(usuario.senha):
+            usuario.senha = gerar_hash_senha(payload.senha)
+            db.add(usuario)
+            db.commit()
+            db.refresh(usuario)
+            print("[LOGIN] Senha legada migrada para bcrypt:", usuario.email)
 
         access_token, refresh_token = build_auth_payload(usuario)
 
@@ -403,8 +412,16 @@ def login_user_mobile(
     if not usuario:
         raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
 
-    if not verificar_senha(payload.senha, usuario.senha):
+    senha_ok = verificar_senha(payload.senha, usuario.senha)
+
+    if not senha_ok:
         raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
+
+    if not senha_esta_hasheada(usuario.senha):
+        usuario.senha = gerar_hash_senha(payload.senha)
+        db.add(usuario)
+        db.commit()
+        db.refresh(usuario)
 
     access_token, refresh_token = build_auth_payload(usuario)
 
