@@ -211,7 +211,7 @@ def internal_send_token(
     if not email_destino:
         raise HTTPException(status_code=400, detail="Pessoa interna sem email cadastrado")
 
-    token_plain = secrets.token_urlsafe(24)
+    token_plain = f"{secrets.randbelow(10000):04d}"
     token_hash = _hash_token(token_plain)
 
     db.query(TokenInterno).filter(
