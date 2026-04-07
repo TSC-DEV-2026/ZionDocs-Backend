@@ -20,6 +20,7 @@ from app.schemas.user import (
     AtualizarSenhaRequest,
     CadastroPessoa,
     DadoItem,
+    EmpresaFilialItem,
     PessoaResponse,
     UsuarioLogin,
     InternalSendTokenResponse,
@@ -433,7 +434,6 @@ def login_user_mobile(
         "refresh_token": refresh_token,
     }
 
-
 @router.get("/user/me", response_model=PessoaResponse)
 def get_me(request: Request, db: Session = Depends(get_db)):
     _, pessoa, usuario = get_current_auth(request, db)
@@ -455,7 +455,7 @@ def get_me(request: Request, db: Session = Depends(get_db)):
                 (TRIM(:matricula) <> '' AND TRIM(c.matricula::text) = TRIM(:matricula))
             )
           AND c.matricula IS NOT NULL AND TRIM(c.matricula::text) <> ''
-          AND c.cliente  IS NOT NULL AND TRIM(c.cliente::text)  <> ''
+          AND c.cliente IS NOT NULL AND TRIM(c.cliente::text) <> ''
           AND c.cliente_nome IS NOT NULL AND TRIM(c.cliente_nome) <> ''
         ORDER BY nome, id, mat
     """)
@@ -507,9 +507,40 @@ def get_me(request: Request, db: Session = Depends(get_db)):
                     ),
                 )
 
+    sql_empresas = text("""
+        SELECT DISTINCT
+               TRIM(c.empresa::text) AS empresa,
+               TRIM(c.filial::text)  AS filial
+        FROM tb_holerite_cabecalhos c
+        WHERE
+            (
+                regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g')
+                = regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
+                OR
+                (TRIM(:matricula) <> '' AND TRIM(c.matricula::text) = TRIM(:matricula))
+            )
+          AND c.empresa IS NOT NULL AND TRIM(c.empresa::text) <> ''
+          AND c.filial IS NOT NULL AND TRIM(c.filial::text) <> ''
+        ORDER BY empresa, filial
+    """)
+
+    empresa_rows = db.execute(
+        sql_empresas,
+        {"cpf": cpf_pessoa, "matricula": mat_pessoa},
+    ).fetchall()
+
+    empresas: List[EmpresaFilialItem] = [
+        EmpresaFilialItem(
+            empresa=str(row[0]).strip(),
+            filial=str(row[1]).strip(),
+        )
+        for row in empresa_rows
+        if row[0] is not None and row[1] is not None
+    ]
+
     return PessoaResponse(
         nome=pessoa.nome,
-        cpf=str(pessoa.cpf),
+        cpf=str(pessoa.cpf) if pessoa.cpf else None,
         email=str(usuario.email),
         cliente=getattr(pessoa, "cliente", None),
         centro_de_custo=getattr(pessoa, "centro_de_custo", None),
@@ -519,8 +550,8 @@ def get_me(request: Request, db: Session = Depends(get_db)):
         interno=bool(getattr(pessoa, "interno", False)),
         email_pessoa=(pessoa.email or None),
         dados=dados,
+        empresa=empresas,
     )
-
 
 @router.post("/user/refresh")
 def refresh_token(request: Request, db: Session = Depends(get_db)):
