@@ -1139,8 +1139,8 @@ def gerar_informe_rendimentos_pdf(
         pdf.set_draw_color(0, 0, 0)
         pdf.set_line_width(0.2)
 
-        cpf_cnpj_cliente = _as_str(registro.get("cpf_cnpj_cliente"))
-        nome_cliente = truncate(_as_str(registro.get("nome_cliente")), 90)
+        cpf_cnpj_empresa = _as_str(registro.get("cpf_cnpj_empresa"))
+        nome_empresa = truncate(_as_str(registro.get("nome_empresa")), 90)
         matricula = _as_str(registro.get("matricula"))
         cpf = _as_str(registro.get("cpf"))
         nome = truncate(_as_str(registro.get("nome")), 90)
@@ -1236,8 +1236,8 @@ def gerar_informe_rendimentos_pdf(
         pdf.line(55, y + 6, 55, y + 18)
         _cell_text(pdf, 12, y + 7, 40, 4, "CNPJ", 7, "B")
         _cell_text(pdf, 57, y + 7, 140, 4, "Nome Empresarial", 7, "B")
-        _cell_text(pdf, 12, y + 11, 40, 4, cpf_cnpj_cliente, 8, "")
-        _cell_text(pdf, 57, y + 11, 140, 4, nome_cliente, 8, "")
+        _cell_text(pdf, 12, y + 11, 40, 4, cpf_cnpj_empresa, 8, "")
+        _cell_text(pdf, 57, y + 11, 140, 4, nome_empresa, 8, "")
 
         y = 59
         _draw_box(pdf, 10, y, 190, 28)
@@ -2052,7 +2052,7 @@ def buscar_informe_rendimentos(
                 WHEN COUNT(DISTINCT cpf_cnpj_cliente) = 1 THEN MAX(cpf_cnpj_cliente)
                 ELSE 'MÚLTIPLOS CNPJS'
             END AS cpf_cnpj_cliente,
-            MAX(nome_cliente) AS nome_cliente,
+            MAX(nome_empresa) AS nome_empresa,
             MAX(matricula) AS matricula,
             MAX(cpf) AS cpf,
             MAX(nome) AS nome,
@@ -2145,7 +2145,7 @@ def montar_informe_rendimentos(
                 WHEN COUNT(DISTINCT cpf_cnpj_cliente) = 1 THEN MAX(cpf_cnpj_cliente)
                 ELSE 'MÚLTIPLOS CNPJS'
             END AS cpf_cnpj_cliente,
-            MAX(nome_cliente) AS nome_cliente,
+            MAX(nome_empresa) AS nome_empresa,
             MAX(matricula) AS matricula,
             MAX(cpf) AS cpf,
             MAX(nome) AS nome,
