@@ -19,6 +19,7 @@ router = APIRouter()
 class BuscarCompetenciasInformeRendimentos(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
+    empresa: str = Field(..., min_length=1)
 
 
 class BuscarHolerite(BaseModel):
@@ -44,12 +45,14 @@ class BuscarInformeRendimentos(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
     competencia: str = Field(..., min_length=1)
+    empresa: str = Field(..., min_length=1)
 
 
 class MontarInformeRendimentos(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     cpf: str = Field(..., min_length=1)
     competencia: str = Field(..., min_length=1)
+    empresa: str = Field(..., min_length=1)
 
 
 class BuscarCompetenciasFerias(BaseModel):
@@ -2002,6 +2005,7 @@ def listar_competencias_informe_rendimentos(
     db: Session = Depends(get_db),
 ):
     cpf = _normalizar_cpf(payload.cpf)
+    empresa = _as_str(payload.empresa)
 
     if not cpf:
         raise HTTPException(status_code=422, detail="Informe cpf.")
@@ -2013,10 +2017,11 @@ def listar_competencias_informe_rendimentos(
         WHERE LPAD(regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g'), 11, '0') = :cpf
           AND competencia IS NOT NULL
           AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') ~ '^[0-9]{4}$'
+          AND codigo_empresa = :empresa
         ORDER BY comp DESC
     """)
 
-    rows = db.execute(sql, {"cpf": cpf}).fetchall()
+    rows = db.execute(sql, {"cpf": cpf, "empresa": empresa}).fetchall()
 
     competencias = [
         {"ano": int(r[0])}
@@ -2040,9 +2045,10 @@ def buscar_informe_rendimentos(
 ):
     cpf = _normalizar_cpf(payload.cpf)
     competencia = _as_str(payload.competencia)
+    empresa = _as_str(payload.empresa)
 
-    if not cpf or not competencia:
-        raise HTTPException(status_code=422, detail="Informe cpf e competencia.")
+    if not cpf or not competencia or not empresa:
+        raise HTTPException(status_code=422, detail="Informe cpf, competencia e empresa.")
 
     sql = text("""
         SELECT
@@ -2074,9 +2080,10 @@ def buscar_informe_rendimentos(
         WHERE LPAD(regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g'), 11, '0') = :cpf
           AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
               regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
+          AND codigo_empresa = :empresa
     """)
 
-    row = db.execute(sql, {"cpf": cpf, "competencia": competencia}).first()
+    row = db.execute(sql, {"cpf": cpf, "competencia": competencia, "empresa": empresa}).first()
 
     if not row:
         raise HTTPException(
@@ -2133,9 +2140,10 @@ def montar_informe_rendimentos(
 ):
     cpf = _normalizar_cpf(payload.cpf)
     competencia = _as_str(payload.competencia)
+    empresa = _as_str(payload.empresa)
 
-    if not cpf or not competencia:
-        raise HTTPException(status_code=422, detail="Informe cpf e competencia.")
+    if not cpf or not competencia or not empresa:
+        raise HTTPException(status_code=422, detail="Informe cpf, competencia e empresa.")
 
     sql = text("""
         SELECT
@@ -2167,9 +2175,10 @@ def montar_informe_rendimentos(
         WHERE LPAD(regexp_replace(TRIM(cpf::text), '[^0-9]', '', 'g'), 11, '0') = :cpf
           AND regexp_replace(TRIM(competencia::text), '[^0-9]', '', 'g') =
               regexp_replace(TRIM(:competencia), '[^0-9]', '', 'g')
+          AND codigo_empresa = :empresa
     """)
 
-    row = db.execute(sql, {"cpf": cpf, "competencia": competencia}).first()
+    row = db.execute(sql, {"cpf": cpf, "competencia": competencia, "empresa": empresa}).first()
 
     if not row:
         raise HTTPException(
@@ -2204,7 +2213,7 @@ def montar_informe_rendimentos(
 
     comp_rows = db.execute(
         sql_complementos,
-        {"cpf": cpf, "competencia": competencia},
+        {"cpf": cpf, "competencia": competencia, "empresa": empresa},
     ).fetchall()
 
     complementos = [dict(r._mapping) for r in comp_rows]
@@ -2227,7 +2236,7 @@ def montar_informe_rendimentos(
 
     pens_rows = db.execute(
         sql_pensoes,
-        {"cpf": cpf, "competencia": competencia},
+        {"cpf": cpf, "competencia": competencia, "empresa": empresa},
     ).fetchall()
 
     pensionistas = [dict(r._mapping) for r in pens_rows]
