@@ -2037,7 +2037,6 @@ def listar_competencias_informe_rendimentos(
 
     return {"competencias": competencias}
 
-
 @router.post("/documents/informe-rendimentos/buscar")
 def buscar_informe_rendimentos(
     payload: BuscarInformeRendimentos = Body(...),
@@ -2054,6 +2053,8 @@ def buscar_informe_rendimentos(
         SELECT
             MAX(codigo_empresa) AS codigo_empresa,
             MAX(codigo_cliente) AS codigo_cliente,
+            MAX(nome_cliente) AS nome_cliente,
+            MAX(cpf_cnpj_empresa) AS cpf_cnpj_empresa,
             CASE
                 WHEN COUNT(DISTINCT cpf_cnpj_cliente) = 1 THEN MAX(cpf_cnpj_cliente)
                 ELSE 'MÚLTIPLOS CNPJS'
@@ -2083,7 +2084,10 @@ def buscar_informe_rendimentos(
           AND codigo_empresa = :empresa
     """)
 
-    row = db.execute(sql, {"cpf": cpf, "competencia": competencia, "empresa": empresa}).first()
+    row = db.execute(
+        sql,
+        {"cpf": cpf, "competencia": competencia, "empresa": empresa},
+    ).first()
 
     if not row:
         raise HTTPException(
@@ -2131,7 +2135,6 @@ def buscar_informe_rendimentos(
         "informes": [informe],
         "complementos": complementos,
     }
-
 
 @router.post("/documents/informe-rendimentos/montar")
 def montar_informe_rendimentos(
@@ -2310,7 +2313,6 @@ def buscar_beneficios(payload: dict = Body(...), db: Session = Depends(get_db)):
         "beneficios": beneficios,
     }
 
-
 @router.post("/documents/beneficios/competencias")
 async def listar_competencias_beneficios(
     request: Request,
@@ -2366,7 +2368,6 @@ async def listar_competencias_beneficios(
         raise HTTPException(status_code=404, detail="Nenhuma competência encontrada para os parâmetros informados.")
 
     return {"competencias": competencias}
-
 
 @router.post("/documents/beneficios/montar")
 def montar_beneficio(payload: dict = Body(...), db: Session = Depends(get_db)):
