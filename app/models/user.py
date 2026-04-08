@@ -4,8 +4,8 @@ from app.database.connection import Base
 
 
 class Pessoa(Base):
-    __tablename__ = "tb_pessoa"
-    __table_args__ = {"schema": "app_rh"}
+    __tablename__ = 'tb_pessoa'
+    __table_args__ = {'schema': 'app_rh'}
 
     id = Column(Integer, primary_key=True, index=True)
     nome = Column(String(100), nullable=False)
@@ -13,6 +13,7 @@ class Pessoa(Base):
     cliente = Column(String(100), nullable=True)
     empresa = Column(String(100), nullable=True)
     filial = Column(String(100), nullable=True)
+    nome_empresa = Column(String(200), nullable=True)
     cpf = Column(String(14), nullable=True, unique=True)
     matricula = Column(String(50), nullable=True)
     data_nascimento = Column(Date, nullable=True)
@@ -22,7 +23,6 @@ class Pessoa(Base):
     email = Column(String(100), nullable=True)
 
     usuarios = relationship("Usuario", back_populates="pessoa")
-
 
 class Usuario(Base):
     __tablename__ = "tb_usuario"

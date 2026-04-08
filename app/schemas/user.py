@@ -65,14 +65,6 @@ class DadoItem(BaseModel):
     nome: Optional[str] = None
     matricula: str
 
-
-class EmpresaFilialItem(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    empresa: str
-    filial: str
-
-
 class PessoaResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -146,3 +138,4 @@ class EmpresaFilialItem(BaseModel):
 
     empresa: str
     filial: str
+    nome_empresa: Optional[str] = None

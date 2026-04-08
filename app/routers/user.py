@@ -509,18 +509,19 @@ def get_me(request: Request, db: Session = Depends(get_db)):
 
     sql_empresas = text("""
         SELECT DISTINCT
-               TRIM(c.empresa::text) AS empresa,
-               TRIM(c.filial::text)  AS filial
-        FROM tb_holerite_cabecalhos c
+            TRIM(p.empresa::text) AS empresa,
+            TRIM(p.nome_empresa::text) AS nome_empresa,
+            TRIM(p.filial::text) AS filial
+        FROM app_rh.tb_pessoa p
         WHERE
             (
-                regexp_replace(TRIM(c.cpf::text), '[^0-9]', '', 'g')
+                regexp_replace(TRIM(p.cpf::text), '[^0-9]', '', 'g')
                 = regexp_replace(TRIM(:cpf), '[^0-9]', '', 'g')
                 OR
-                (TRIM(:matricula) <> '' AND TRIM(c.matricula::text) = TRIM(:matricula))
+                (TRIM(:matricula) <> '' AND TRIM(p.matricula::text) = TRIM(:matricula))
             )
-          AND c.empresa IS NOT NULL AND TRIM(c.empresa::text) <> ''
-          AND c.filial IS NOT NULL AND TRIM(c.filial::text) <> ''
+        AND p.empresa IS NOT NULL AND TRIM(p.empresa::text) <> ''
+        AND p.filial IS NOT NULL AND TRIM(p.filial::text) <> ''
         ORDER BY empresa, filial
     """)
 
@@ -532,10 +533,11 @@ def get_me(request: Request, db: Session = Depends(get_db)):
     empresas: List[EmpresaFilialItem] = [
         EmpresaFilialItem(
             empresa=str(row[0]).strip(),
-            filial=str(row[1]).strip(),
+            nome_empresa=str(row[1]).strip() if row[1] is not None else None,
+            filial=str(row[2]).strip(),
         )
         for row in empresa_rows
-        if row[0] is not None and row[1] is not None
+        if row[0] is not None and row[2] is not None
     ]
 
     return PessoaResponse(
