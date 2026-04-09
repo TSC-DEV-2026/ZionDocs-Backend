@@ -1687,7 +1687,6 @@ async def listar_competencias_holerite(
 
     return {"competencias": competencias}
 
-
 @router.post("/documents/holerite/buscar")
 def buscar_holerite(payload: BuscarHolerite = Body(...), db: Session = Depends(get_db)):
     cpf = (payload.cpf or "").strip()
@@ -1825,7 +1824,14 @@ def buscar_holerite(payload: BuscarHolerite = Body(...), db: Session = Depends(g
                AND {comp_norm_expr}         = :comp_norm
         """)
         try:
-            val = db.execute(sql_aceite, {"cpf": cpf, "matricula": matricula, "comp_norm": comp_norm_input}).scalar()
+            val = db.execute(
+                sql_aceite,
+                {
+                    "cpf": cpf,
+                    "matricula": matricula,
+                    "comp_norm": comp_norm_input,
+                },
+            ).scalar()
             aceito_bool = bool(val) if val is not None else False
         except Exception:
             db.rollback()
@@ -1864,6 +1870,38 @@ def buscar_holerite(payload: BuscarHolerite = Body(...), db: Session = Depends(g
             continue
         rodape = dict(zip(rod_res.keys(), rod_row))
 
+        sql_empresa_pessoa = text("""
+            SELECT
+                TRIM(COALESCE(p.empresa::text, '')) AS empresa_codigo,
+                TRIM(COALESCE(p.nome_empresa::text, '')) AS empresa_nome
+            FROM app_rh.tb_pessoa p
+            WHERE regexp_replace(TRIM(COALESCE(p.cpf::text, '')), '[^0-9]', '', 'g')
+                    = regexp_replace(TRIM(CAST(:cpf AS text)), '[^0-9]', '', 'g')
+            AND TRIM(COALESCE(p.matricula::text, '')) = TRIM(CAST(:matricula AS text))
+            ORDER BY p.id DESC
+            LIMIT 1
+        """)
+        empresa_row = db.execute(
+            sql_empresa_pessoa,
+            {
+                "cpf": cabecalho.get("cpf") or cpf or "",
+                "matricula": cabecalho.get("matricula") or matricula or "",
+                "empresa": cabecalho.get("empresa") or empresa or "",
+            },
+        ).first()
+
+        if empresa_row:
+            empresa_codigo = _as_str(empresa_row[0])
+            empresa_nome = _as_str(empresa_row[1])
+
+            if empresa_codigo:
+                cabecalho["cliente"] = empresa_codigo
+                rodape["cliente"] = empresa_codigo
+
+            if empresa_nome:
+                cabecalho["cliente_nome"] = empresa_nome
+                rodape["cliente_nome"] = empresa_nome
+
         sql_evt = text("""
             SELECT *
               FROM tb_holerite_eventos e
@@ -1880,36 +1918,56 @@ def buscar_holerite(payload: BuscarHolerite = Body(...), db: Session = Depends(g
             return 1 if tc == "A" else (2 if tc == "P" else 99)
 
         try:
-            eventos_sorted = sorted(eventos, key=lambda e: (_ord_tc(e.get("tipo_calculo")), e.get("evento")))
+            eventos_sorted = sorted(
+                eventos,
+                key=lambda e: (_ord_tc(e.get("tipo_calculo")), e.get("evento")),
+            )
         except Exception:
             eventos_sorted = eventos
 
         grupos = {"A": [], "P": []}
         for e in eventos_sorted:
-            tc = (e.get("tipo_calculo") or "").upper()
-            if tc in grupos:
-                grupos[tc].append(e)
+            tipo_calc = (e.get("tipo_calculo") or "").upper()
+            if tipo_calc in grupos:
+                grupos[tipo_calc].append(e)
 
         documentos = []
         if grupos["A"]:
-            documentos.append({"tipo_calculo": "A", "descricao": "Adiantamento", "eventos": grupos["A"]})
+            documentos.append(
+                {
+                    "tipo_calculo": "A",
+                    "descricao": "Adiantamento",
+                    "eventos": grupos["A"],
+                }
+            )
         if grupos["P"]:
-            documentos.append({"tipo_calculo": "P", "descricao": "Pagamento", "eventos": grupos["P"]})
+            documentos.append(
+                {
+                    "tipo_calculo": "P",
+                    "descricao": "Pagamento",
+                    "eventos": grupos["P"],
+                }
+            )
 
         tc = (cabecalho.get("tipo_calculo") or "").strip().upper()
 
-        holerites.append({
-            "uuid": uuid,
-            "aceito": aceito_bool,
-            "tipo_calculo": tc,
-            "descricao": "Adiantamento" if tc == "A" else ("Pagamento" if tc == "P" else None),
-            "cabecalho": cabecalho,
-            "rodape": rodape,
-            "documentos": documentos,
-        })
+        holerites.append(
+            {
+                "uuid": uuid,
+                "aceito": aceito_bool,
+                "tipo_calculo": tc,
+                "descricao": "Adiantamento" if tc == "A" else ("Pagamento" if tc == "P" else None),
+                "cabecalho": cabecalho,
+                "rodape": rodape,
+                "documentos": documentos,
+            }
+        )
 
     if not holerites:
-        raise HTTPException(status_code=404, detail="UUIDs encontrados, mas não foi possível montar holerites completos.")
+        raise HTTPException(
+            status_code=404,
+            detail="UUIDs encontrados, mas não foi possível montar holerites completos.",
+        )
 
     return {
         "tipo": "holerite",
@@ -1922,6 +1980,83 @@ def buscar_holerite(payload: BuscarHolerite = Body(...), db: Session = Depends(g
     }
 
 
+# @router.post("/documents/holerite/montar")
+# def montar_holerite(payload: MontarHolerite, db: Session = Depends(get_db)):
+#     params = {
+#         "matricula": payload.matricula,
+#         "competencia": payload.competencia,
+#         "lote": payload.lote,
+#         "cpf": payload.cpf,
+#     }
+
+#     sql_cabecalho = text("""
+#         SELECT empresa, filial, empresa_nome, empresa_cnpj,
+#                cliente, cliente_nome, cliente_cnpj,
+#                matricula, nome, funcao_nome, admissao,
+#                competencia, lote,
+#                uuid::text AS uuid
+#         FROM tb_holerite_cabecalhos
+#         WHERE matricula   = :matricula
+#           AND competencia = :competencia
+#           AND lote        = :lote
+#           AND cpf         = :cpf
+#     """)
+#     cab_res = db.execute(sql_cabecalho, params)
+#     cab_row = cab_res.first()
+#     if not cab_row:
+#         raise HTTPException(status_code=404, detail="Cabeçalho não encontrado")
+#     cabecalho = dict(zip(cab_res.keys(), cab_row))
+
+#     sql_eventos = text("""
+#         SELECT evento, evento_nome, referencia, valor, tipo
+#         FROM tb_holerite_eventos
+#         WHERE matricula   = :matricula
+#           AND competencia = :competencia
+#           AND lote        = :lote
+#           AND cpf         = :cpf
+#         ORDER BY evento
+#     """)
+#     evt_res = db.execute(sql_eventos, params)
+#     eventos = [dict(zip(evt_res.keys(), row)) for row in evt_res.fetchall()]
+
+#     if not eventos:
+#         return Response(status_code=204)
+
+#     for evt in eventos:
+#         tipo = evt.get("tipo", "").upper()
+#         if tipo not in ("V", "D"):
+#             raise HTTPException(status_code=400, detail=f"Tipo de evento inválido: {tipo}")
+#         evt["tipo"] = tipo
+
+#     sql_rodape = text("""
+#         SELECT total_vencimentos, total_descontos,
+#                valor_liquido, salario_base,
+#                sal_contr_inss, base_calc_fgts,
+#                fgts_mes, base_calc_irrf,
+#                dep_sf, dep_irf
+#         FROM tb_holerite_rodapes
+#         WHERE matricula   = :matricula
+#           AND competencia = :competencia
+#           AND lote        = :lote
+#           AND cpf         = :cpf
+#     """)
+#     rod_res = db.execute(sql_rodape, params)
+#     rod_row = rod_res.first()
+#     if not rod_row:
+#         raise HTTPException(status_code=404, detail="Rodapé não encontrado")
+#     rodape = dict(zip(rod_res.keys(), rod_row))
+
+#     raw_pdf = gerar_recibo(cabecalho, eventos, rodape)
+#     pdf_base64 = base64.b64encode(raw_pdf).decode("utf-8")
+
+#     return {
+#         "uuid": cabecalho.get("uuid"),
+#         "cabecalho": cabecalho,
+#         "eventos": eventos,
+#         "rodape": rodape,
+#         "pdf_base64": pdf_base64,
+#     }
+
 @router.post("/documents/holerite/montar")
 def montar_holerite(payload: MontarHolerite, db: Session = Depends(get_db)):
     params = {
@@ -1932,25 +2067,43 @@ def montar_holerite(payload: MontarHolerite, db: Session = Depends(get_db)):
     }
 
     sql_cabecalho = text("""
-        SELECT empresa, filial, empresa_nome, empresa_cnpj,
-               cliente, cliente_nome, cliente_cnpj,
-               matricula, nome, funcao_nome, admissao,
-               competencia, lote,
-               uuid::text AS uuid
+        SELECT
+            empresa,
+            filial,
+            empresa_nome,
+            empresa_cnpj,
+            cliente,
+            cliente_nome,
+            cliente_cnpj,
+            matricula,
+            nome,
+            funcao_nome,
+            admissao,
+            competencia,
+            lote,
+            uuid::text AS uuid
         FROM tb_holerite_cabecalhos
         WHERE matricula   = :matricula
           AND competencia = :competencia
           AND lote        = :lote
           AND cpf         = :cpf
+        LIMIT 1
     """)
     cab_res = db.execute(sql_cabecalho, params)
     cab_row = cab_res.first()
+
     if not cab_row:
         raise HTTPException(status_code=404, detail="Cabeçalho não encontrado")
+
     cabecalho = dict(zip(cab_res.keys(), cab_row))
 
     sql_eventos = text("""
-        SELECT evento, evento_nome, referencia, valor, tipo
+        SELECT
+            evento,
+            evento_nome,
+            referencia,
+            valor,
+            tipo
         FROM tb_holerite_eventos
         WHERE matricula   = :matricula
           AND competencia = :competencia
@@ -1965,28 +2118,68 @@ def montar_holerite(payload: MontarHolerite, db: Session = Depends(get_db)):
         return Response(status_code=204)
 
     for evt in eventos:
-        tipo = evt.get("tipo", "").upper()
+        tipo = (evt.get("tipo") or "").upper()
         if tipo not in ("V", "D"):
             raise HTTPException(status_code=400, detail=f"Tipo de evento inválido: {tipo}")
         evt["tipo"] = tipo
 
     sql_rodape = text("""
-        SELECT total_vencimentos, total_descontos,
-               valor_liquido, salario_base,
-               sal_contr_inss, base_calc_fgts,
-               fgts_mes, base_calc_irrf,
-               dep_sf, dep_irf
+        SELECT
+            total_vencimentos,
+            total_descontos,
+            valor_liquido,
+            salario_base,
+            sal_contr_inss,
+            base_calc_fgts,
+            fgts_mes,
+            base_calc_irrf,
+            dep_sf,
+            dep_irf
         FROM tb_holerite_rodapes
         WHERE matricula   = :matricula
           AND competencia = :competencia
           AND lote        = :lote
           AND cpf         = :cpf
+        LIMIT 1
     """)
     rod_res = db.execute(sql_rodape, params)
     rod_row = rod_res.first()
+
     if not rod_row:
         raise HTTPException(status_code=404, detail="Rodapé não encontrado")
+
     rodape = dict(zip(rod_res.keys(), rod_row))
+
+    sql_empresa_pessoa = text("""
+        SELECT
+            TRIM(COALESCE(p.empresa::text, '')) AS empresa_codigo,
+            TRIM(COALESCE(p.nome_empresa::text, '')) AS empresa_nome
+        FROM app_rh.tb_pessoa p
+        WHERE regexp_replace(TRIM(COALESCE(p.cpf::text, '')), '[^0-9]', '', 'g')
+                = regexp_replace(TRIM(CAST(:cpf AS text)), '[^0-9]', '', 'g')
+          AND TRIM(COALESCE(p.matricula::text, '')) = TRIM(CAST(:matricula AS text))
+        ORDER BY p.id DESC
+        LIMIT 1
+    """)
+    empresa_row = db.execute(
+        sql_empresa_pessoa,
+        {
+            "cpf": payload.cpf,
+            "matricula": payload.matricula,
+        },
+    ).first()
+
+    if empresa_row:
+        empresa_codigo = _as_str(empresa_row[0])
+        empresa_nome = _as_str(empresa_row[1])
+
+        if empresa_codigo:
+            cabecalho["empresa"] = empresa_codigo
+            cabecalho["cliente"] = empresa_codigo
+
+        if empresa_nome:
+            cabecalho["empresa_nome"] = empresa_nome
+            cabecalho["cliente_nome"] = empresa_nome
 
     raw_pdf = gerar_recibo(cabecalho, eventos, rodape)
     pdf_base64 = base64.b64encode(raw_pdf).decode("utf-8")

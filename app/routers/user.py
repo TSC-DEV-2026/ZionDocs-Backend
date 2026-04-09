@@ -301,7 +301,6 @@ def internal_validate_token(
 
     return InternalValidateTokenResponse(valid=True, reason=None)
 
-
 @router.post(
     "/user/register",
     response_model=None,
